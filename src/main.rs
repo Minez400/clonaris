@@ -1,6 +1,7 @@
 mod commands;
 mod diff;
 mod hash;
+mod merge;
 mod objects;
 mod oplog;
 mod repository;
@@ -49,7 +50,28 @@ fn main() {
             }
             commands::cmd_save(&message)
         }
+        "amend" => {
+            let mut message = String::new();
+            let mut i = 2;
+            while i < args.len() {
+                if args[i] == "-m" && i + 1 < args.len() {
+                    message = args[i + 1].clone();
+                    i += 2;
+                } else if !args[i].starts_with('-') && message.is_empty() {
+                    message = args[i].clone();
+                    i += 1;
+                } else {
+                    i += 1;
+                }
+            }
+            if message.trim().is_empty() {
+                eprintln!("Erro: O comando amend requer uma mensagem. Ex: clonaris amend -m \"Nova mensagem\"");
+                std::process::exit(1);
+            }
+            commands::cmd_amend(&message)
+        }
         "log" => commands::cmd_log(),
+        "ops" => commands::cmd_ops(),
         "undo" => commands::cmd_undo(),
         "redo" => commands::cmd_redo(),
         "branch" => {
@@ -66,6 +88,13 @@ fn main() {
                 std::process::exit(1);
             }
             commands::cmd_switch(&args[2])
+        }
+        "merge" => {
+            if args.len() < 3 {
+                eprintln!("Erro: Especifique o ramo a ser mesclado. Ex: clonaris merge feature");
+                std::process::exit(1);
+            }
+            commands::cmd_merge(&args[2])
         }
         "tag" => {
             let tag_name = if args.len() > 2 {

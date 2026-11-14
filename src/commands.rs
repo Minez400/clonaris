@@ -1,16 +1,23 @@
 use std::env;
 use std::fs;
 use std::io;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::diff::{compute_diff, format_colored_diff, is_binary};
-use crate::objects::{parse_commit, read_object};
+use crate::merge::execute_merge;
+use crate::objects::{
+    parse_commit, read_object, serialize_commit, serialize_tree, write_object, Commit, TreeEntry,
+};
 use crate::oplog::{
-    append_op, pop_last_op, pop_last_redo, push_redo, restore_op_to_log,
+    append_op, pop_last_op, pop_last_redo, push_redo, read_ops, restore_op_to_log,
 };
 use crate::repository::{
-    create_tag, find_repo_root, get_current_branch, get_head, init, list_tags, set_head,
+    create_tag, find_repo_root, get_author, get_current_branch, get_head, init, list_tags,
+    set_head,
 };
-use crate::workspace::{get_head_tree, get_status, restore_tree, save};
+use crate::workspace::{
+    get_head_tree, get_status, restore_tree, save, scan_workspace_files,
+};
 
 pub fn cmd_init() -> io::Result<()> {
     let current = env::current_dir()?;
@@ -203,6 +210,78 @@ pub fn cmd_save(message: &str) -> io::Result<()> {
     Ok(())
 }
 
+pub fn cmd_amend(message: &str) -> io::Result<()> {
+    let root = match find_repo_root() {
+        Some(r) => r,
+        None => {
+            eprintln!("Erro: Nenhum repositório Clonaris encontrado.");
+            std::process::exit(1);
+        }
+    };
+
+    let head_hash = match get_head(&root)? {
+        Some(h) => h,
+        None => {
+            eprintln!("Erro: Não há commits anteriores para alterar (amend).");
+            std::process::exit(1);
+        }
+    };
+
+    let old_commit_data = read_object(&root, &head_hash)?;
+    let old_commit = parse_commit(&old_commit_data)?;
+
+    // Scan workspace to update tree with any new changes if present
+    let files = scan_workspace_files(&root)?;
+    let mut tree_entries = Vec::new();
+    for rel_path in files {
+        let full_path = root.join(&rel_path);
+        let data = fs::read(&full_path)?;
+        let blob_hash = write_object(&root, &data)?;
+        tree_entries.push(TreeEntry {
+            kind: "blob".to_string(),
+            hash: blob_hash,
+            path: rel_path,
+        });
+    }
+
+    let tree_bytes = serialize_tree(&tree_entries);
+    let tree_hash = write_object(&root, &tree_bytes)?;
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    let new_commit = Commit {
+        tree: tree_hash,
+        parents: old_commit.parents,
+        author: get_author(&root),
+        timestamp: now,
+        message: message.to_string(),
+    };
+
+    let commit_bytes = serialize_commit(&new_commit);
+    let new_commit_hash = write_object(&root, &commit_bytes)?;
+
+    set_head(&root, &new_commit_hash)?;
+
+    append_op(
+        &root,
+        "amend",
+        Some(&head_hash),
+        Some(&new_commit_hash),
+        &format!("Amend: {}", message),
+    )?;
+
+    let branch = get_current_branch(&root);
+    println!(
+        "✓ [\x1b[1;32m{}\x1b[0m \x1b[33m{:.8}\x1b[0m] Snapshot atualizado com sucesso (amend)!",
+        branch, new_commit_hash
+    );
+    println!("Dica: Você pode desfazer este amend a qualquer momento com 'clonaris undo'.");
+    Ok(())
+}
+
 pub fn cmd_log() -> io::Result<()> {
     let root = match find_repo_root() {
         Some(r) => r,
@@ -238,6 +317,9 @@ pub fn cmd_log() -> io::Result<()> {
         println!("|   Autor:     {}", commit.author);
         println!("|   Data:      {}", date_str);
         println!("|   Árvore:    {:.8}", commit.tree);
+        if commit.parents.len() > 1 {
+            println!("|   Merge:     {}", commit.parents.iter().map(|p| format!("{:.8}", p)).collect::<Vec<_>>().join(" + "));
+        }
         println!("|");
         for line in commit.message.lines() {
             println!("|       {}", line);
@@ -345,6 +427,62 @@ pub fn cmd_redo() -> io::Result<()> {
     Ok(())
 }
 
+pub fn cmd_ops() -> io::Result<()> {
+    let root = match find_repo_root() {
+        Some(r) => r,
+        None => {
+            eprintln!("Erro: Nenhum repositório Clonaris encontrado.");
+            std::process::exit(1);
+        }
+    };
+
+    let ops = read_ops(&root, "oplog")?;
+    if ops.is_empty() {
+        println!("Nenhuma operação registrada no histórico ainda.");
+        return Ok(());
+    }
+
+    println!("\x1b[1mLinha do Tempo de Operações (OpLog):\x1b[0m");
+    println!(
+        "{:<4}  {:<19}  {:<8}  {:<10}  {}",
+        "ID", "DATA & HORA (UTC)", "AÇÃO", "SNAPSHOT", "DESCRIÇÃO"
+    );
+    println!("{}", "-".repeat(75));
+
+    for (i, op) in ops.iter().enumerate() {
+        let date_str = format_timestamp(op.timestamp);
+        let snapshot_short = if op.new_head == "none" {
+            "-".to_string()
+        } else {
+            format!("{:.8}", op.new_head)
+        };
+
+        println!(
+            "#{:<3}  {:<19}  \x1b[1;36m{:<8}\x1b[0m  \x1b[33m{:<10}\x1b[0m  {}",
+            i + 1,
+            date_str,
+            op.action,
+            snapshot_short,
+            op.description
+        );
+    }
+
+    println!();
+    println!("Dica: você pode reverter as ações acima com 'clonaris undo'.");
+    Ok(())
+}
+
+pub fn cmd_merge(target_branch: &str) -> io::Result<()> {
+    let root = match find_repo_root() {
+        Some(r) => r,
+        None => {
+            eprintln!("Erro: Nenhum repositório Clonaris encontrado.");
+            std::process::exit(1);
+        }
+    };
+    execute_merge(&root, target_branch)
+}
+
 pub fn cmd_branch(name: Option<&str>) -> io::Result<()> {
     let root = match find_repo_root() {
         Some(r) => r,
@@ -407,6 +545,12 @@ pub fn cmd_switch(branch_name: &str) -> io::Result<()> {
     if !branch_file.exists() {
         eprintln!("Erro: O ramo '{}' não foi encontrado.", branch_name);
         return Ok(());
+    }
+
+    let diff = get_status(&root)?;
+    if !diff.is_clean() {
+        println!("⚠️  Aviso: Você possui alterações locais pendentes.");
+        println!("   O Clonaris preservará seus arquivos modificados.");
     }
 
     let target_commit_hash = fs::read_to_string(&branch_file)?.trim().to_string();
@@ -481,11 +625,14 @@ pub fn print_help() {
     println!("    status               Mostra o estado atual dos arquivos");
     println!("    diff [arquivo]       Mostra as alterações linha a linha (com cores)");
     println!("    save -m \"<msg>\"      Grava um novo snapshot atômico diretamente");
+    println!("    amend -m \"<msg>\"     Atualiza o snapshot mais recente com segurança");
     println!("    log                  Exibe o histórico de snapshots com árvore ASCII");
+    println!("    ops                  Exibe a linha do tempo de operações (OpLog)");
     println!("    undo                 Desfaz a última operação com segurança");
     println!("    redo                 Refaz a última operação desfeita");
     println!("    branch [nome]        Lista os ramos ou cria um novo ramo");
     println!("    switch <ramo>        Alterna para outro ramo restaurando os arquivos");
+    println!("    merge <ramo>         Mescla outro ramo (com conflitos não-bloqueantes!)");
     println!("    tag [nome]           Lista as tags ou cria uma tag no snapshot atual");
     println!("    help                 Exibe esta ajuda");
     println!();
@@ -493,10 +640,13 @@ pub fn print_help() {
     println!("    clonaris init");
     println!("    echo 'hello' > index.txt");
     println!("    clonaris save -m 'Primeiro commit'");
-    println!("    echo 'world' >> index.txt");
-    println!("    clonaris diff");
-    println!("    clonaris undo");
-    println!("    clonaris redo");
+    println!("    clonaris branch feature");
+    println!("    clonaris switch feature");
+    println!("    echo 'feature work' >> index.txt");
+    println!("    clonaris save -m 'Trabalho na feature'");
+    println!("    clonaris switch main");
+    println!("    clonaris merge feature");
+    println!("    clonaris ops");
 }
 
 fn format_timestamp(timestamp: u64) -> String {
