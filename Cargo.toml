@@ -4,3 +4,10 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+
+[profile.release]
+opt-level = "z"       # Otimização agressiva para tamanho mínimo
+lto = true            # Link-Time Optimization (otimização inter-módulos e remoção de código morto)
+codegen-units = 1     # Unidade única de compilação para maximizar inlining e deduplicação
+panic = "abort"       # Remove as tabelas pesadas de unwinding da pilha
+strip = true          # Remove automaticamente todos os símbolos de debug do binário
