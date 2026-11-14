@@ -1,6 +1,19 @@
-# 🪐 Clonaris VCS
+<p align="center">
+  <img src="clonaris_icon.jpg" alt="Clonaris VCS Logo" width="200" style="border-radius: 24px;" />
+</p>
 
-**Clonaris** is a modern, ultra-fast, and frictionless version control system (VCS) built in **100% Pure Rust** with **ZERO external dependencies** (using exclusively the Rust Standard Library `std`).
+<h1 align="center">🪐 Clonaris VCS</h1>
+
+<p align="center">
+  <strong>A modern, ultra-fast, and frictionless version control system built in 100% Pure Rust with zero external dependencies.</strong>
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Language-Rust%202024-orange.svg" alt="Language" />
+  <img src="https://img.shields.io/badge/Dependencies-Zero%20(Pure%20std)-brightgreen.svg" alt="Dependencies" />
+  <img src="https://img.shields.io/badge/Binary%20Size-~574%20KB-blue.svg" alt="Size" />
+  <img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License" />
+</p>
 
 ---
 
@@ -25,7 +38,7 @@
    * Built-in completion generator for **Bash** and **Zsh** supporting commands, options, file paths, and branch names.
 9. **Zero Dependencies & Aggressive Optimization:**
    * Pure Rust SHA-256 (RFC 6234) implementation.
-   * Tiny standalone binary of only **~427 KB** thanks to LTO and code-size optimizations.
+   * Tiny standalone binary of only **~574 KB** (even with full GitHub sync, Stash, and CAS Doctor included) thanks to LTO and code-size optimizations.
 
 ---
 
