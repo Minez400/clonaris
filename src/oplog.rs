@@ -1,25 +1,41 @@
+//! # Operation Log & Universal Undo Engine
+//!
+//! Maintains an append-only transaction log (`.clonaris/oplog`) recording every
+//! modifying operation (`save`, `switch`, `merge`, `amend`).
+//!
+//! Enables instantaneous, risk-free `undo` and `redo` without complex reflog parsing.
+
 use std::fs::{self, OpenOptions};
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// A single recorded operation in the transaction history.
 #[derive(Debug, Clone)]
 pub struct OpEntry {
+    /// Unix timestamp when the operation occurred.
     pub timestamp: u64,
+    /// Action verb: `"save"`, `"switch"`, `"merge"`, `"amend"`.
     pub action: String,
-    pub prev_head: String, // "none" if empty
+    /// Snapshot hash before the operation (`"none"` if initialized).
+    pub prev_head: String,
+    /// Snapshot hash after the operation.
     pub new_head: String,
+    /// Human-readable summary or commit message.
     pub description: String,
 }
 
+/// Encodes multiline descriptions to preserve the single-line-per-entry format.
 fn encode_desc(desc: &str) -> String {
     desc.replace('\\', "\\\\").replace('\n', "\\n").replace('\r', "")
 }
 
+/// Decodes escaped descriptions back to their original formatting.
 fn decode_desc(desc: &str) -> String {
     desc.replace("\\n", "\n").replace("\\\\", "\\")
 }
 
+/// Appends a new operation record to `.clonaris/oplog` and clears the redo stack.
 pub fn append_op(
     repo_root: &Path,
     action: &str,
@@ -27,7 +43,7 @@ pub fn append_op(
     new_head: Option<&str>,
     description: &str,
 ) -> io::Result<()> {
-    // When a new action is performed, clear the redo log
+    // Standard undo/redo semantics: new actions clear the redo log
     let redo_path = repo_root.join(".clonaris").join("redolog");
     if redo_path.exists() {
         let _ = fs::write(&redo_path, "");
@@ -52,6 +68,7 @@ pub fn append_op(
     Ok(())
 }
 
+/// Reads all operation entries from an oplog file (`oplog` or `redolog`).
 pub fn read_ops(repo_root: &Path, filename: &str) -> io::Result<Vec<OpEntry>> {
     let path = repo_root.join(".clonaris").join(filename);
     if !path.exists() {
@@ -79,6 +96,7 @@ pub fn read_ops(repo_root: &Path, filename: &str) -> io::Result<Vec<OpEntry>> {
     Ok(entries)
 }
 
+/// Pops and returns the last operation from an oplog file, rewriting the remaining entries.
 pub fn pop_op(repo_root: &Path, filename: &str) -> io::Result<Option<OpEntry>> {
     let path = repo_root.join(".clonaris").join(filename);
     if !path.exists() {
@@ -104,6 +122,7 @@ pub fn pop_op(repo_root: &Path, filename: &str) -> io::Result<Option<OpEntry>> {
     Ok(last)
 }
 
+/// Pushes an operation entry into the redo stack (`.clonaris/redolog`).
 pub fn push_redo(repo_root: &Path, op: &OpEntry) -> io::Result<()> {
     let redo_path = repo_root.join(".clonaris").join("redolog");
     let mut file = OpenOptions::new()
@@ -123,14 +142,17 @@ pub fn push_redo(repo_root: &Path, op: &OpEntry) -> io::Result<()> {
     Ok(())
 }
 
+/// Convenience function to pop the latest operation from `oplog`.
 pub fn pop_last_op(repo_root: &Path) -> io::Result<Option<OpEntry>> {
     pop_op(repo_root, "oplog")
 }
 
+/// Convenience function to pop the latest undone operation from `redolog`.
 pub fn pop_last_redo(repo_root: &Path) -> io::Result<Option<OpEntry>> {
     pop_op(repo_root, "redolog")
 }
 
+/// Restores an operation back to `oplog` during a redo action.
 pub fn restore_op_to_log(repo_root: &Path, op: &OpEntry) -> io::Result<()> {
     let oplog_path = repo_root.join(".clonaris").join("oplog");
     let mut file = OpenOptions::new()

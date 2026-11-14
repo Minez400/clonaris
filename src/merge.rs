@@ -1,3 +1,13 @@
+//! # 3-Way Merge & First-Class Non-Blocking Conflict Engine
+//!
+//! Provides automated 3-way branch merging by locating the Lowest Common Ancestor (LCA).
+//!
+//! ## Core Innovation:
+//! Unlike traditional VCSs that freeze or abort execution upon conflict, Clonaris
+//! treats conflicts as valid, first-class repository states. The merge commit is safely
+//! recorded with both parent hashes and conflict markers in place. The developer can
+//! freely switch branches, inspect, test, and resolve at their own pace.
+
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::io;
@@ -13,6 +23,7 @@ use crate::repository::{get_author, get_current_branch, get_head, set_head};
 use crate::workspace::{get_status, restore_tree};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// Locates the Lowest Common Ancestor (LCA) between two commits using Breadth-First Search (BFS).
 pub fn find_lca(repo_root: &Path, commit_a: &str, commit_b: &str) -> Option<String> {
     if commit_a == commit_b {
         return Some(commit_a.to_string());
@@ -58,6 +69,7 @@ pub fn find_lca(repo_root: &Path, commit_a: &str, commit_b: &str) -> Option<Stri
     None
 }
 
+/// Reads a `Tree` object and converts it into a `(file_path -> blob_hash)` map for quick lookups.
 pub fn get_tree_map(repo_root: &Path, tree_hash: &str) -> io::Result<HashMap<String, String>> {
     let mut map = HashMap::new();
     if tree_hash.is_empty() {
@@ -71,12 +83,13 @@ pub fn get_tree_map(repo_root: &Path, tree_hash: &str) -> io::Result<HashMap<Str
     Ok(map)
 }
 
+/// Result of merging a single file across base, local, and remote revisions.
 pub struct MergeFileResult {
     pub content: Vec<u8>,
     pub has_conflict: bool,
 }
 
-// Smart 3-way line merge
+/// Performs a 3-way line reconciliation for text contents.
 pub fn three_way_merge_text(
     base: &str,
     local: &str,
@@ -103,7 +116,7 @@ pub fn three_way_merge_text(
         };
     }
 
-    // Check if changes are completely non-overlapping
+    // Check if changes are non-overlapping
     let diff_local = compute_diff(base, local);
     let diff_remote = compute_diff(base, remote);
 
@@ -135,9 +148,6 @@ pub fn three_way_merge_text(
         };
     }
 
-    // Line-by-line anchor reconciliation
-    let mut out = String::new();
-
     // Fast check: if one side only appended lines to the end of base
     if local.starts_with(base) && !remote.starts_with(base) && base.ends_with('\n') {
         let appended_local = &local[base.len()..];
@@ -163,8 +173,9 @@ pub fn three_way_merge_text(
         };
     }
 
-    // Emit localized conflict block
-    out.push_str(&format!("<<<<<<< ATUAL ({})\n", local_label));
+    // Emit localized conflict markers
+    let mut out = String::new();
+    out.push_str(&format!("<<<<<<< CURRENT ({})\n", local_label));
     out.push_str(local);
     if !local.ends_with('\n') {
         out.push('\n');
@@ -174,7 +185,7 @@ pub fn three_way_merge_text(
     if !remote.ends_with('\n') {
         out.push('\n');
     }
-    out.push_str(&format!(">>>>>>> RAMO ALVO ({})\n", remote_label));
+    out.push_str(&format!(">>>>>>> TARGET ({})\n", remote_label));
     let has_conflict = true;
 
     MergeFileResult {
@@ -183,24 +194,25 @@ pub fn three_way_merge_text(
     }
 }
 
+/// Executes the full merge workflow from `target_branch` into the currently active branch.
 pub fn execute_merge(repo_root: &Path, target_branch: &str) -> io::Result<()> {
     let diff = get_status(repo_root)?;
     if !diff.is_clean() {
-        eprintln!("Erro: Há alterações não salvas no diretório de trabalho.");
-        eprintln!("Salve suas alterações primeiro com: clonaris save -m \"checkpoint\"");
+        eprintln!("Error: You have uncommitted changes in your working tree.");
+        eprintln!("Please save your changes first: clonaris save -m \"checkpoint\"");
         return Ok(());
     }
 
     let local_branch = get_current_branch(repo_root);
     if local_branch == target_branch {
-        println!("Não é possível mesclar um ramo nele mesmo.");
+        println!("Cannot merge a branch into itself.");
         return Ok(());
     }
 
     let local_commit_hash = match get_head(repo_root)? {
         Some(h) => h,
         None => {
-            eprintln!("Erro: O ramo atual não possui snapshots.");
+            eprintln!("Error: The current branch has no snapshots to merge.");
             return Ok(());
         }
     };
@@ -212,23 +224,23 @@ pub fn execute_merge(repo_root: &Path, target_branch: &str) -> io::Result<()> {
         .join(target_branch);
 
     if !target_branch_file.exists() {
-        eprintln!("Erro: Ramo '{}' não foi encontrado.", target_branch);
+        eprintln!("Error: Branch '{}' was not found.", target_branch);
         return Ok(());
     }
 
     let target_commit_hash = fs::read_to_string(target_branch_file)?.trim().to_string();
 
     if local_commit_hash == target_commit_hash {
-        println!("Os ramos já estão perfeitamente sincronizados. Nada a fazer.");
+        println!("Branches are already up to date. Nothing to merge.");
         return Ok(());
     }
 
     let lca = find_lca(repo_root, &local_commit_hash, &target_commit_hash);
 
-    // Fast-Forward check
+    // Fast-Forward check: if local commit is the common ancestor, advance pointer directly
     if let Some(ref lca_hash) = lca {
         if lca_hash == &local_commit_hash {
-            println!("⚡ Mesclagem Fast-Forward para {:.8}!", target_commit_hash);
+            println!("⚡ Fast-forward merge to {:.8}!", target_commit_hash);
             let target_commit_data = read_object(repo_root, &target_commit_hash)?;
             let target_commit = parse_commit(&target_commit_data)?;
 
@@ -240,16 +252,16 @@ pub fn execute_merge(repo_root: &Path, target_branch: &str) -> io::Result<()> {
                 "merge",
                 Some(&local_commit_hash),
                 Some(&target_commit_hash),
-                &format!("Fast-forward merge de '{}' em '{}'", target_branch, local_branch),
+                &format!("Fast-forward merge of '{}' into '{}'", target_branch, local_branch),
             )?;
             return Ok(());
         } else if lca_hash == &target_commit_hash {
-            println!("O ramo atual já contém todas as alterações de '{}'.", target_branch);
+            println!("The current branch already contains all changes from '{}'.", target_branch);
             return Ok(());
         }
     }
 
-    // 3-Way Merge
+    // 3-Way Merge execution
     let base_tree = if let Some(ref lca_hash) = lca {
         let commit_data = read_object(repo_root, lca_hash)?;
         let commit = parse_commit(&commit_data)?;
@@ -294,7 +306,7 @@ pub fn execute_merge(repo_root: &Path, target_branch: &str) -> io::Result<()> {
                     path: file_path.clone(),
                 });
             }
-            // Only changed in target (take target)
+            // Only changed in target branch (adopt target version)
             (Some(b_h), Some(loc_h), Some(tgt_h)) if loc_h == b_h && tgt_h != b_h => {
                 let tgt_bytes = read_object(repo_root, tgt_h)?;
                 let full = repo_root.join(&file_path);
@@ -308,7 +320,7 @@ pub fn execute_merge(repo_root: &Path, target_branch: &str) -> io::Result<()> {
                     path: file_path.clone(),
                 });
             }
-            // Only changed in local (keep local)
+            // Only changed in local branch (keep local version)
             (Some(b_h), Some(loc_h), Some(tgt_h)) if tgt_h == b_h && loc_h != b_h => {
                 merged_tree_entries.push(TreeEntry {
                     kind: "blob".to_string(),
@@ -316,13 +328,13 @@ pub fn execute_merge(repo_root: &Path, target_branch: &str) -> io::Result<()> {
                     path: file_path.clone(),
                 });
             }
-            // Changed in both -> 3-way merge!
+            // Modified in both branches -> 3-way merge!
             (b_opt, Some(loc_h), Some(tgt_h)) => {
                 let loc_bytes = read_object(repo_root, loc_h)?;
                 let tgt_bytes = read_object(repo_root, tgt_h)?;
 
                 let (merged_content, has_conflict) = if is_binary(&loc_bytes) || is_binary(&tgt_bytes) {
-                    // Binary conflict: default to local and mark conflict
+                    // Binary conflict: default to local and record conflict
                     (loc_bytes, true)
                 } else {
                     let base_str = if let Some(b_h) = b_opt {
@@ -428,12 +440,13 @@ pub fn execute_merge(repo_root: &Path, target_branch: &str) -> io::Result<()> {
         .unwrap_or_default()
         .as_secs();
 
+    // Create merge commit with TWO parent hashes
     let merge_commit = Commit {
         tree: tree_hash,
         parents: vec![local_commit_hash.clone(), target_commit_hash.clone()],
         author: get_author(repo_root),
         timestamp: now,
-        message: format!("Mescla ramo '{}' em '{}'", target_branch, local_branch),
+        message: format!("Merge branch '{}' into '{}'", target_branch, local_branch),
     };
 
     let commit_bytes = serialize_commit(&merge_commit);
@@ -446,28 +459,28 @@ pub fn execute_merge(repo_root: &Path, target_branch: &str) -> io::Result<()> {
         "merge",
         Some(&local_commit_hash),
         Some(&merge_commit_hash),
-        &format!("Mescla ramo '{}' em '{}'", target_branch, local_branch),
+        &format!("Merge branch '{}' into '{}'", target_branch, local_branch),
     )?;
 
     if conflicted_files.is_empty() {
         println!(
-            "✓ [\x1b[1;32m{}\x1b[0m \x1b[33m{:.8}\x1b[0m] Mesclado com sucesso com '{}'!",
+            "✓ [\x1b[1;32m{}\x1b[0m \x1b[33m{:.8}\x1b[0m] Successfully merged branch '{}'!",
             local_branch, merge_commit_hash, target_branch
         );
     } else {
         println!(
-            "⚠️  [\x1b[1;32m{}\x1b[0m \x1b[33m{:.8}\x1b[0m] Snapshot de merge gravado com conflitos!",
+            "⚠️  [\x1b[1;32m{}\x1b[0m \x1b[33m{:.8}\x1b[0m] Merge snapshot recorded with conflicts!",
             local_branch, merge_commit_hash
         );
-        println!("\x1b[1;33mConflitos encontrados nos arquivos:\x1b[0m");
+        println!("\x1b[1;33mConflicted files:\x1b[0m");
         for cf in &conflicted_files {
             println!("  ! {}", cf);
         }
         println!();
-        println!("✨ \x1b[1;32mDiferencial do Clonaris (Conflito Não-Bloqueante):\x1b[0m");
-        println!("   Seu repositório NÃO está travado. O snapshot foi salvo com os marcadores.");
-        println!("   Você pode resolver interativamente com: 'clonaris resolve <arquivo>'");
-        println!("   E salvar com: 'clonaris save -m \"Resolve conflitos de merge\"'");
+        println!("✨ \x1b[1;32mClonaris Non-Blocking Conflict Feature:\x1b[0m");
+        println!("   Your repository is NOT locked. The snapshot was safely committed with markers.");
+        println!("   You can resolve conflicts interactively with: 'clonaris resolve <file>'");
+        println!("   And commit the resolution with: 'clonaris save -m \"Resolve merge conflicts\"'");
     }
 
     Ok(())
@@ -479,14 +492,13 @@ mod tests {
 
     #[test]
     fn test_three_way_non_conflicting_appends() {
-        let base = "linha 1\nlinha 2\n";
-        let local = "linha 1\nlinha 2\nlinha 3 local\n";
-        let remote = "linha 0 remote\nlinha 1\nlinha 2\n";
-        // Local only appended
+        let base = "line 1\nline 2\n";
+        let local = "line 1\nline 2\nline 3 local\n";
+        let remote = "line 0 remote\nline 1\nline 2\n";
         let res = three_way_merge_text(base, local, remote, "local", "remote");
         assert!(!res.has_conflict);
         let s = String::from_utf8(res.content).unwrap();
-        assert!(s.contains("linha 0 remote"));
-        assert!(s.contains("linha 3 local"));
+        assert!(s.contains("line 0 remote"));
+        assert!(s.contains("line 3 local"));
     }
 }

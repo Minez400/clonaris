@@ -1,63 +1,117 @@
 # 🪐 Clonaris VCS
 
-**Clonaris** é um sistema de controle de versão (VCS) moderno, ultrarrápido e sem atritos, construído em **100% Rust Puro** com **ZERO dependências externas** (utilizando exclusivamente a biblioteca padrão `std`).
+**Clonaris** is a modern, ultra-fast, and frictionless version control system (VCS) built in **100% Pure Rust** with **ZERO external dependencies** (using exclusively the Rust Standard Library `std`).
 
 ---
 
-## ⚡ Por que Clonaris resolve as maiores dores dos Devs no Git?
+## ⚡ Why Clonaris is Simpler and Better than Git
 
-1. **Conflitos de Merge Não-Bloqueantes (*First-Class Conflicts*):**
-   * *No Git:* O repositório entra em pânico, trava em modo intermediário e impede você de trocar de branch ou executar outros comandos até resolver tudo ou dar abort.
-   * *No Clonaris:* O comando `clonaris merge <ramo>` grava o snapshot com ambos os pais e com os marcadores de conflito nos arquivos. **Seu repositório NUNCA fica travado.**
-2. **Resolução de Conflitos Inteligente (`clonaris resolve <arquivo>`):**
-   * Chega de apagar manualmente marcadores de conflito. Escolha interativamente ou use `--current` ou `--target` para resolver conflitos de forma instantânea.
-3. **Descarte Seletivo de Arquivos (`clonaris discard <arquivo>`):**
-   * Descarta alterações indesejadas de um arquivo específico ou de todo o diretório (`.`) sem precisar desfazer o snapshot inteiro.
-4. **Linha do Tempo Humana (`clonaris ops`):**
-   * Esqueça o pesadelo ininteligível do `git reflog`. O Clonaris possui uma esteira numerada com data, hora, ação e descrição legível de cada comando executado.
-5. **Viagem no Tempo Totalmente Segura (`undo` e `redo`):**
-   * Qualquer ação (`save`, `amend`, `merge`, `switch`) pode ser desfeita e refeita instantaneamente sem risco de perda de código.
-6. **Autocompletion Nativo no Terminal (`clonaris completion`):**
-   * Suporte nativo a autocompletar para **Bash** e **Zsh** com preenchimento inteligente de comandos, arquivos e ramos.
-7. **Zero Dependências Externas & Super Otimizado:**
-   * Motor de hashing SHA-256 (RFC 6234) implementado do zero.
-   * Binário de apenas **~420 KB** graças a LTO e otimização por tamanho (`opt-level = "z"`).
+1. **First-Class Non-Blocking Conflicts:**
+   * *In Git:* A merge conflict locks your repository in an interim state, halting your workflow until manually resolved or aborted.
+   * *In Clonaris:* Branch merges (`clonaris merge <branch>`) record the snapshot with both parent hashes and standard conflict markers. **Your repository is NEVER locked.** You can switch branches, inspect, test, and resolve at your own pace.
+2. **Interactive Conflict Resolution (`clonaris resolve <file>`):**
+   * No need to manually hunt down and delete `<<<<<<<` and `>>>>>>>` markers. Resolve conflicts interactively or use automated flags (`--current` / `--target`).
+3. **Selective File Discard (`clonaris discard <file>`):**
+   * Discard uncommitted modifications to a specific file or the entire working tree (`.`) without rolling back snapshots.
+4. **Human-Readable Transaction Timeline (`clonaris ops`):**
+   * Forget the cryptic `git reflog`. Clonaris maintains a numbered chronological audit log with timestamps, actions, snapshot hashes, and descriptions.
+5. **Bidirectional Time Travel (`undo` & `redo`):**
+   * Mistake during a commit, merge, or switch? Run `clonaris undo`. Undid something by accident? Run `clonaris redo`.
+6. **No Staging Area Friction (Zero Staging):**
+   * No mandatory `git add`. The `save -m "message"` command captures working tree changes directly into an atomic snapshot.
+7. **Safe, Traceable Amend (`clonaris amend`):**
+   * In Git, `commit --amend` destroys the previous commit. In Clonaris, amend is safely recorded in the transaction log and can be reverted with `undo`.
+8. **Native Shell Autocompletion:**
+   * Built-in completion generator for **Bash** and **Zsh** supporting commands, options, file paths, and branch names.
+9. **Zero Dependencies & Aggressive Optimization:**
+   * Pure Rust SHA-256 (RFC 6234) implementation.
+   * Tiny standalone binary of only **~427 KB** thanks to LTO and code-size optimizations.
 
 ---
 
-## 🚀 Como Compilar e Instalar
+## 🚀 Installation & Build
 
 ```bash
 cd /home/minez400/Projetos/clonaris
 cargo build --release
 
-# O executável já é instalado em ~/.local/bin/clonaris:
+# Install binary to ~/.local/bin:
 cp target/release/clonaris ~/.local/bin/clonaris
 
-# Ativar autocompletion no seu shell (adicione ao seu ~/.bashrc ou ~/.zshrc):
+# Activate shell autocompletion (add to ~/.bashrc or ~/.zshrc):
 eval "$(clonaris completion bash)"
 ```
 
 ---
 
-## 🛠️ Comandos Disponíveis
+## 🛠️ Command Reference
 
-| Comando | Descrição |
+| Command | Description |
 | :--- | :--- |
-| `clonaris init` | Inicializa um repositório `.clonaris/` com o ramo padrão `main`. |
-| `clonaris status` | Mostra os arquivos novos (`+`), modificados (`~`) ou deletados (`-`). |
-| `clonaris diff [arquivo]` | Exibe o diff colorido linha a linha das alterações atuais. |
-| `clonaris save -m "mensagem"` | Cria um snapshot atômico direto de todo o estado atual. |
-| `clonaris amend -m "mensagem"` | Atualiza o snapshot mais recente preservando o histórico de undo. |
-| `clonaris discard <arquivo\|.>` | Descarta alterações locais em um arquivo específico ou em tudo. |
-| `clonaris resolve <arquivo>` | Resolve conflitos de merge interativamente (`--current` ou `--target`). |
-| `clonaris merge <ramo>` | Mescla outro ramo (3-way merge inteligente e conflitos não-bloqueantes). |
-| `clonaris log` | Exibe o histórico de snapshots com árvore ASCII e nós de merge. |
-| `clonaris ops` | Exibe a linha do tempo legível de operações (alternativa ao `reflog`). |
-| `clonaris undo` | Desfaz a última operação registrada restaurando os arquivos em disco. |
-| `clonaris redo` | Refaz a última alteração desfeita, avançando no tempo com segurança. |
-| `clonaris branch [nome]` | Lista os ramos disponíveis ou cria um novo ramo no snapshot atual. |
-| `clonaris switch <ramo>` | Alterna entre ramos e restaura os arquivos correspondentes em disco. |
-| `clonaris tag [nome]` | Lista as tags ou cria uma tag estática no snapshot atual. |
-| `clonaris completion [shell]` | Gera script de autocompletar para `bash` ou `zsh`. |
-| `clonaris help` | Exibe a tela de ajuda com todos os comandos e parâmetros. |
+| `clonaris init` | Initialize an empty repository with default branch `main`. |
+| `clonaris status` | Show working tree status: added (`+`), modified (`~`), deleted (`-`). |
+| `clonaris diff [file]` | Display line-by-line color diffs against the latest snapshot. |
+| `clonaris save -m "msg"` | Create an atomic snapshot directly without staging. |
+| `clonaris amend -m "msg"` | Safely update the latest snapshot preserving undo history. |
+| `clonaris discard <file\|.>` | Discard uncommitted modifications in a specific file or all files. |
+| `clonaris resolve <file>` | Resolve merge conflict markers interactively (`--current` or `--target`). |
+| `clonaris merge <branch>` | Merge another branch with 3-way reconciliation and non-blocking conflicts. |
+| `clonaris log` | Display snapshot history with an ASCII graph tree. |
+| `clonaris ops` | Display the chronological transaction log (alternative to `reflog`). |
+| `clonaris undo` | Safely revert the latest operation and restore disk files. |
+| `clonaris redo` | Reapply the most recently undone operation. |
+| `clonaris branch [name]` | List branches or create a new branch pointer (`feature/login` supported). |
+| `clonaris switch <branch>` | Switch active branch with data-loss protection (Smart Checkout). |
+| `clonaris tag [name]` | List tags or create an immutable static tag (`v1.0.0`). |
+| `clonaris completion [shell]` | Generate shell autocompletion script (`bash` or `zsh`). |
+| `clonaris help` | Display help and usage information. |
+
+---
+
+## 📁 Repository Internal Layout (`.clonaris/`)
+
+```text
+.clonaris/
+├── config        # User identity configuration (name and email)
+├── HEAD          # Symbolic reference (e.g., ref: refs/heads/main)
+├── oplog         # Append-only transaction log for `clonaris ops` and `undo`
+├── redolog       # Undone operations stack for `clonaris redo`
+├── objects/      # Content-Addressed Store for Blobs, Trees, and Commits (SHA-256)
+│   ├── b0/
+│   │   └── 2d20...
+└── refs/
+    ├── heads/    # Branch pointers storing snapshot hashes
+    │   ├── main
+    │   └── feature/auth
+    └── tags/     # Static tag pointers (e.g., v1.0.0)
+```
+
+---
+
+## 🧪 Usage Example
+
+```bash
+# 1. Initialize
+clonaris init
+
+# 2. Create and commit directly
+echo "fn main() {}" > main.rs
+clonaris status
+clonaris save -m "Initial commit"
+clonaris tag v1.0.0
+
+# 3. Create a hierarchical feature branch
+clonaris branch feature/login
+clonaris switch feature/login
+echo "fn login() {}" >> main.rs
+clonaris save -m "Add login functionality"
+
+# 4. Switch back to main and merge
+clonaris switch main
+clonaris merge feature/login
+
+# 5. Inspect timeline and undo/redo
+clonaris ops
+clonaris undo
+clonaris redo
+```

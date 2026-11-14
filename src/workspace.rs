@@ -1,3 +1,8 @@
+//! # Working Tree & Workspace Engine
+//!
+//! Handles file scanning, `.clonarisignore` filtering, working tree diffing
+//! against HEAD, direct snapshot creation (zero-staging), and safe tree restoration.
+
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{self, Error, ErrorKind};
@@ -12,19 +17,25 @@ use crate::objects::{
 use crate::oplog::append_op;
 use crate::repository::{get_author, get_head, set_head};
 
+/// Represents the status difference between working files and HEAD snapshot.
 #[derive(Debug)]
 pub struct WorkingDiff {
+    /// Newly added files not present in HEAD.
     pub added: Vec<String>,
+    /// Tracked files whose content hash differs from HEAD.
     pub modified: Vec<String>,
+    /// Files present in HEAD but deleted from the working tree.
     pub deleted: Vec<String>,
 }
 
 impl WorkingDiff {
+    /// Returns true if there are no pending additions, modifications, or deletions.
     pub fn is_clean(&self) -> bool {
         self.added.is_empty() && self.modified.is_empty() && self.deleted.is_empty()
     }
 }
 
+/// Loads ignore patterns from `.clonarisignore` plus built-in defaults (`.clonaris`, `.git`, `target`).
 pub fn load_ignore_patterns(repo_root: &Path) -> Vec<String> {
     let mut patterns = vec![
         ".clonaris".to_string(),
@@ -44,12 +55,13 @@ pub fn load_ignore_patterns(repo_root: &Path) -> Vec<String> {
     patterns
 }
 
+/// Checks if a relative path matches any ignore rule or pattern.
 pub fn should_ignore(rel_path: &str, patterns: &[String]) -> bool {
     for pat in patterns {
         if rel_path == pat || rel_path.starts_with(&format!("{}/", pat)) {
             return true;
         }
-        // Simple wildcard check (*.log, etc.)
+        // Wildcard extension match (e.g., "*.log")
         if pat.starts_with('*') {
             let ext = &pat[1..];
             if rel_path.ends_with(ext) {
@@ -60,7 +72,7 @@ pub fn should_ignore(rel_path: &str, patterns: &[String]) -> bool {
     false
 }
 
-// Recursively walks the repo directory and returns relative paths
+/// Recursively traverses the working directory and returns all non-ignored relative file paths.
 pub fn scan_workspace_files(repo_root: &Path) -> io::Result<Vec<String>> {
     let ignore_patterns = load_ignore_patterns(repo_root);
     let mut files = Vec::new();
@@ -97,6 +109,7 @@ fn walk_dir_inner(
     Ok(())
 }
 
+/// Returns a map of `(relative_path -> blob_hash)` representing the files tracked in HEAD.
 pub fn get_head_tree(repo_root: &Path) -> io::Result<HashMap<String, String>> {
     let mut map = HashMap::new();
     if let Some(head_hash) = get_head(repo_root)? {
@@ -111,6 +124,7 @@ pub fn get_head_tree(repo_root: &Path) -> io::Result<HashMap<String, String>> {
     Ok(map)
 }
 
+/// Calculates the difference between the current working copy and the HEAD snapshot.
 pub fn get_status(repo_root: &Path) -> io::Result<WorkingDiff> {
     let head_tree = get_head_tree(repo_root)?;
     let workspace_files = scan_workspace_files(repo_root)?;
@@ -155,6 +169,7 @@ pub fn get_status(repo_root: &Path) -> io::Result<WorkingDiff> {
     })
 }
 
+/// Captures an atomic snapshot of the entire working tree and commits it directly without a staging area.
 pub fn save(repo_root: &Path, message: &str) -> io::Result<Option<String>> {
     let diff = get_status(repo_root)?;
     if diff.is_clean() {
@@ -201,10 +216,10 @@ pub fn save(repo_root: &Path, message: &str) -> io::Result<Option<String>> {
     let commit_bytes = serialize_commit(&commit);
     let commit_hash = write_object(repo_root, &commit_bytes)?;
 
-    // Update branch/HEAD
+    // Advance active branch or HEAD
     set_head(repo_root, &commit_hash)?;
 
-    // Log operation
+    // Record action in transaction log
     append_op(
         repo_root,
         "save",
@@ -216,13 +231,16 @@ pub fn save(repo_root: &Path, message: &str) -> io::Result<Option<String>> {
     Ok(Some(commit_hash))
 }
 
+/// Restores the working tree to match a target tree hash.
+///
+/// **Data Safety Guarantee:** Only removes files that were explicitly tracked in the
+/// previous HEAD snapshot and are absent from `target_tree_hash`.
+/// Untracked local files are safely preserved.
 pub fn restore_tree(repo_root: &Path, target_tree_hash: &str) -> io::Result<()> {
     let target_tree_data = read_object(repo_root, target_tree_hash)?;
     let target_tree_entries = parse_tree(&target_tree_data)?;
     let target_paths: HashSet<String> = target_tree_entries.iter().map(|e| e.path.clone()).collect();
 
-    // BUG FIX: Only delete files that were tracked in the previous HEAD commit and are NOT in the target tree!
-    // Untracked local files are safely preserved.
     let head_tree = get_head_tree(repo_root)?;
     for (tracked_file, _) in head_tree {
         if !target_paths.contains(&tracked_file) {
@@ -231,7 +249,7 @@ pub fn restore_tree(repo_root: &Path, target_tree_hash: &str) -> io::Result<()> 
         }
     }
 
-    // Write all files from target tree
+    // Write all objects from target tree
     for entry in target_tree_entries {
         let blob_data = read_object(repo_root, &entry.hash)?;
         let file_path = repo_root.join(&entry.path);
@@ -245,6 +263,8 @@ pub fn restore_tree(repo_root: &Path, target_tree_hash: &str) -> io::Result<()> 
     Ok(())
 }
 
+/// Discards uncommitted modifications to a specific file.
+/// If the file was newly created, it is removed. If it existed in HEAD, it is restored.
 pub fn discard_file(repo_root: &Path, rel_path: &str) -> io::Result<bool> {
     let head_tree = get_head_tree(repo_root)?;
     let full_path = repo_root.join(rel_path);

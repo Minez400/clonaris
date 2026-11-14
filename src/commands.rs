@@ -1,3 +1,9 @@
+//! # CLI Commands Implementation
+//!
+//! Handlers for all user-facing Clonaris CLI subcommands:
+//! `init`, `status`, `diff`, `save`, `amend`, `discard`, `resolve`, `log`, `ops`,
+//! `undo`, `redo`, `branch`, `switch`, `merge`, `tag`, and `completion`.
+
 use std::collections::HashMap;
 use std::env;
 use std::fs;
@@ -22,20 +28,24 @@ use crate::workspace::{
     discard_file, get_head_tree, get_status, restore_tree, save, scan_workspace_files,
 };
 
+/// Command: `clonaris init`
+/// Initializes a new `.clonaris/` repository in the current directory.
 pub fn cmd_init() -> io::Result<()> {
     let current = env::current_dir()?;
     init(&current)?;
-    println!("✓ Repositório Clonaris inicializado com sucesso em {}", current.display());
-    println!("  Ramo inicial: main");
-    println!("  Dica: crie seus arquivos e execute 'clonaris save -m \"sua mensagem\"'");
+    println!("✓ Initialized empty Clonaris repository in {}", current.display());
+    println!("  Default branch: main");
+    println!("  Tip: Create files and run 'clonaris save -m \"your message\"'");
     Ok(())
 }
 
+/// Command: `clonaris status`
+/// Displays the current active branch, latest snapshot, and modified/added/deleted files.
 pub fn cmd_status() -> io::Result<()> {
     let root = match find_repo_root() {
         Some(r) => r,
         None => {
-            eprintln!("Erro: Nenhum repositório Clonaris encontrado neste diretório ou superiores.");
+            eprintln!("Error: No Clonaris repository found in this directory or any parent.");
             std::process::exit(1);
         }
     };
@@ -44,50 +54,52 @@ pub fn cmd_status() -> io::Result<()> {
     let head = get_head(&root)?;
     let diff = get_status(&root)?;
 
-    println!("No ramo: \x1b[1;32m{}\x1b[0m", branch);
+    println!("On branch: \x1b[1;32m{}\x1b[0m", branch);
     match head {
-        Some(h) => println!("Último snapshot: \x1b[33m{:.8}\x1b[0m", h),
-        None => println!("Nenhum snapshot salvo ainda."),
+        Some(h) => println!("Latest snapshot: \x1b[33m{:.8}\x1b[0m", h),
+        None => println!("No snapshots recorded yet."),
     }
     println!();
 
     if diff.is_clean() {
-        println!("✓ Diretório de trabalho limpo. Nenhuma alteração pendente.");
+        println!("✓ Working tree clean. Nothing to commit.");
         return Ok(());
     }
 
     if !diff.added.is_empty() {
-        println!("\x1b[1;32mNovos arquivos:\x1b[0m");
+        println!("\x1b[1;32mNew files:\x1b[0m");
         for file in &diff.added {
             println!("  + {}", file);
         }
     }
 
     if !diff.modified.is_empty() {
-        println!("\x1b[1;34mArquivos modificados:\x1b[0m");
+        println!("\x1b[1;34mModified files:\x1b[0m");
         for file in &diff.modified {
             println!("  ~ {}", file);
         }
     }
 
     if !diff.deleted.is_empty() {
-        println!("\x1b[1;31mArquivos deletados:\x1b[0m");
+        println!("\x1b[1;31mDeleted files:\x1b[0m");
         for file in &diff.deleted {
             println!("  - {}", file);
         }
     }
 
     println!();
-    println!("Execute 'clonaris diff' para ver as alterações linha a linha.");
-    println!("Execute 'clonaris save -m \"mensagem\"' para gravar o snapshot diretamente.");
+    println!("Run 'clonaris diff' to inspect line-by-line changes.");
+    println!("Run 'clonaris save -m \"message\"' to commit changes directly.");
     Ok(())
 }
 
+/// Command: `clonaris diff [file]`
+/// Shows line-by-line color diffs against the latest snapshot.
 pub fn cmd_diff(target_file: Option<&str>) -> io::Result<()> {
     let root = match find_repo_root() {
         Some(r) => r,
         None => {
-            eprintln!("Erro: Nenhum repositório Clonaris encontrado.");
+            eprintln!("Error: No Clonaris repository found.");
             std::process::exit(1);
         }
     };
@@ -96,7 +108,7 @@ pub fn cmd_diff(target_file: Option<&str>) -> io::Result<()> {
     let head_tree = get_head_tree(&root)?;
 
     if diff.is_clean() {
-        println!("Nenhuma alteração para exibir diff.");
+        println!("Working tree clean. No changes to display.");
         return Ok(());
     }
 
@@ -116,7 +128,7 @@ pub fn cmd_diff(target_file: Option<&str>) -> io::Result<()> {
         let new_bytes = fs::read(root.join(file))?;
 
         if is_binary(&old_bytes) || is_binary(&new_bytes) {
-            println!("\x1b[1;33mArquivo binário {} difere do snapshot anterior\x1b[0m", file);
+            println!("\x1b[1;33mBinary file {} differs from previous snapshot\x1b[0m", file);
             continue;
         }
 
@@ -138,7 +150,7 @@ pub fn cmd_diff(target_file: Option<&str>) -> io::Result<()> {
         printed_anything = true;
         let new_bytes = fs::read(root.join(file))?;
         if is_binary(&new_bytes) {
-            println!("\x1b[1;32mNovo arquivo binário adicionado: {}\x1b[0m", file);
+            println!("\x1b[1;32mNew binary file added: {}\x1b[0m", file);
             continue;
         }
 
@@ -159,7 +171,7 @@ pub fn cmd_diff(target_file: Option<&str>) -> io::Result<()> {
         let old_hash = head_tree.get(file).unwrap();
         let old_bytes = read_object(&root, old_hash)?;
         if is_binary(&old_bytes) {
-            println!("\x1b[1;31mArquivo binário excluído: {}\x1b[0m", file);
+            println!("\x1b[1;31mBinary file deleted: {}\x1b[0m", file);
             continue;
         }
 
@@ -169,17 +181,19 @@ pub fn cmd_diff(target_file: Option<&str>) -> io::Result<()> {
     }
 
     if !printed_anything && target_file.is_some() {
-        println!("O arquivo '{}' não possui alterações pendentes.", target_file.unwrap());
+        println!("File '{}' has no uncommitted changes.", target_file.unwrap());
     }
 
     Ok(())
 }
 
+/// Command: `clonaris discard <file | .>`
+/// Discards uncommitted modifications in a specific file or the entire working tree.
 pub fn cmd_discard(target: &str) -> io::Result<()> {
     let root = match find_repo_root() {
         Some(r) => r,
         None => {
-            eprintln!("Erro: Nenhum repositório Clonaris encontrado.");
+            eprintln!("Error: No Clonaris repository found.");
             std::process::exit(1);
         }
     };
@@ -187,51 +201,57 @@ pub fn cmd_discard(target: &str) -> io::Result<()> {
     if target == "." {
         let diff = get_status(&root)?;
         if diff.is_clean() {
-            println!("Nenhuma alteração para descartar.");
+            println!("Nothing to discard (working tree clean).");
             return Ok(());
         }
         for file in diff.added.iter().chain(diff.modified.iter()).chain(diff.deleted.iter()) {
             discard_file(&root, file)?;
         }
-        println!("✓ Todas as alterações locais foram descartadas com sucesso.");
+        println!("✓ All local modifications have been discarded.");
     } else {
         if discard_file(&root, target)? {
-            println!("✓ Alterações em '{}' descartadas com sucesso.", target);
+            println!("✓ Changes in '{}' discarded successfully.", target);
         } else {
-            println!("Nenhuma alteração encontrada para descartar em '{}'.", target);
+            println!("No modifications found to discard in '{}'.", target);
         }
     }
     Ok(())
 }
 
+/// Command: `clonaris resolve <file> [--current | --target]`
+/// Interactively or automatically resolves merge conflict markers.
 pub fn cmd_resolve(file: &str, strategy: Option<&str>) -> io::Result<()> {
     let root = match find_repo_root() {
         Some(r) => r,
         None => {
-            eprintln!("Erro: Nenhum repositório Clonaris encontrado.");
+            eprintln!("Error: No Clonaris repository found.");
             std::process::exit(1);
         }
     };
     crate::resolve::prompt_resolve_file(&root.join(file), strategy)
 }
 
+/// Command: `clonaris completion [bash | zsh]`
+/// Outputs shell completion script to stdout.
 pub fn cmd_completion(shell: Option<&str>) -> io::Result<()> {
     crate::completion::generate_completion(shell.unwrap_or("bash"));
     Ok(())
 }
 
+/// Command: `clonaris save -m "message"`
+/// Commits the entire working copy state directly into a new immutable snapshot.
 pub fn cmd_save(message: &str) -> io::Result<()> {
     let root = match find_repo_root() {
         Some(r) => r,
         None => {
-            eprintln!("Erro: Nenhum repositório Clonaris encontrado.");
+            eprintln!("Error: No Clonaris repository found.");
             std::process::exit(1);
         }
     };
 
     let diff = get_status(&root)?;
     if diff.is_clean() {
-        println!("Nada para salvar (diretório de trabalho limpo).");
+        println!("Nothing to save (working tree clean).");
         return Ok(());
     }
 
@@ -244,7 +264,7 @@ pub fn cmd_save(message: &str) -> io::Result<()> {
                 branch, commit_hash, message
             );
             println!(
-                "  {} alteração(ões): +{} novo(s), ~{} modificado(s), -{} deletado(s)",
+                "  {} change(s): +{} added, ~{} modified, -{} deleted",
                 total_changes,
                 diff.added.len(),
                 diff.modified.len(),
@@ -252,17 +272,19 @@ pub fn cmd_save(message: &str) -> io::Result<()> {
             );
         }
         None => {
-            println!("Nada para salvar.");
+            println!("Nothing to save.");
         }
     }
     Ok(())
 }
 
+/// Command: `clonaris amend -m "message"`
+/// Updates the latest commit with the new message and current files, preserving undo capability.
 pub fn cmd_amend(message: &str) -> io::Result<()> {
     let root = match find_repo_root() {
         Some(r) => r,
         None => {
-            eprintln!("Erro: Nenhum repositório Clonaris encontrado.");
+            eprintln!("Error: No Clonaris repository found.");
             std::process::exit(1);
         }
     };
@@ -270,7 +292,7 @@ pub fn cmd_amend(message: &str) -> io::Result<()> {
     let head_hash = match get_head(&root)? {
         Some(h) => h,
         None => {
-            eprintln!("Erro: Não há commits anteriores para alterar (amend).");
+            eprintln!("Error: No previous commit found to amend.");
             std::process::exit(1);
         }
     };
@@ -322,18 +344,20 @@ pub fn cmd_amend(message: &str) -> io::Result<()> {
 
     let branch = get_current_branch(&root);
     println!(
-        "✓ [\x1b[1;32m{}\x1b[0m \x1b[33m{:.8}\x1b[0m] Snapshot atualizado com sucesso (amend)!",
+        "✓ [\x1b[1;32m{}\x1b[0m \x1b[33m{:.8}\x1b[0m] Snapshot updated successfully (amend)!",
         branch, new_commit_hash
     );
-    println!("Dica: Você pode desfazer este amend a qualquer momento com 'clonaris undo'.");
+    println!("Tip: You can revert this amend at any time using 'clonaris undo'.");
     Ok(())
 }
 
+/// Command: `clonaris log`
+/// Displays commit ancestry from HEAD formatted with ASCII tree graph lines.
 pub fn cmd_log() -> io::Result<()> {
     let root = match find_repo_root() {
         Some(r) => r,
         None => {
-            eprintln!("Erro: Nenhum repositório Clonaris encontrado.");
+            eprintln!("Error: No Clonaris repository found.");
             std::process::exit(1);
         }
     };
@@ -341,7 +365,7 @@ pub fn cmd_log() -> io::Result<()> {
     let mut current_hash = match get_head(&root)? {
         Some(h) => h,
         None => {
-            println!("Nenhum snapshot encontrado neste repositório.");
+            println!("No snapshots found in this repository.");
             return Ok(());
         }
     };
@@ -361,9 +385,9 @@ pub fn cmd_log() -> io::Result<()> {
         let date_str = format_timestamp(commit.timestamp);
 
         println!("\x1b[33m*   commit {}\x1b[0m", current_hash);
-        println!("|   Autor:     {}", commit.author);
-        println!("|   Data:      {}", date_str);
-        println!("|   Árvore:    {:.8}", commit.tree);
+        println!("|   Author:    {}", commit.author);
+        println!("|   Date:      {}", date_str);
+        println!("|   Tree:      {:.8}", commit.tree);
         if commit.parents.len() > 1 {
             println!("|   Merge:     {}", commit.parents.iter().map(|p| format!("{:.8}", p)).collect::<Vec<_>>().join(" + "));
         }
@@ -381,15 +405,17 @@ pub fn cmd_log() -> io::Result<()> {
         }
     }
 
-    println!("Total de snapshots: {}", count);
+    println!("Total snapshots: {}", count);
     Ok(())
 }
 
+/// Command: `clonaris undo`
+/// Reverts the latest operation, restoring disk files and branch pointers safely.
 pub fn cmd_undo() -> io::Result<()> {
     let root = match find_repo_root() {
         Some(r) => r,
         None => {
-            eprintln!("Erro: Nenhum repositório Clonaris encontrado.");
+            eprintln!("Error: No Clonaris repository found.");
             std::process::exit(1);
         }
     };
@@ -397,13 +423,13 @@ pub fn cmd_undo() -> io::Result<()> {
     let last_op = match pop_last_op(&root)? {
         Some(op) => op,
         None => {
-            println!("Nenhuma operação no histórico para desfazer.");
+            println!("No operations in history to undo.");
             return Ok(());
         }
     };
 
     println!(
-        "Desfazendo operação: \x1b[1;36m{}\x1b[0m ({})",
+        "Undoing operation: \x1b[1;36m{}\x1b[0m ({})",
         last_op.action, last_op.description
     );
 
@@ -415,7 +441,7 @@ pub fn cmd_undo() -> io::Result<()> {
         let current_branch = get_current_branch(&root);
         let head_ref = root.join(".clonaris").join("refs").join("heads").join(current_branch);
         let _ = fs::remove_file(head_ref);
-        println!("✓ Retornado ao estado inicial (repositório sem commits).");
+        println!("✓ Reverted to initial state (repository with no commits).");
     } else {
         // Restore prev_head commit
         let commit_data = read_object(&root, &last_op.prev_head)?;
@@ -425,20 +451,22 @@ pub fn cmd_undo() -> io::Result<()> {
         set_head(&root, &last_op.prev_head)?;
 
         println!(
-            "✓ Snapshot restaurado com sucesso para \x1b[33m{:.8}\x1b[0m",
+            "✓ Snapshot restored successfully to \x1b[33m{:.8}\x1b[0m",
             last_op.prev_head
         );
     }
 
-    println!("Dica: use 'clonaris redo' se quiser refazer esta alteração.");
+    println!("Tip: Run 'clonaris redo' if you wish to reapply this operation.");
     Ok(())
 }
 
+/// Command: `clonaris redo`
+/// Reapplies the most recently undone operation.
 pub fn cmd_redo() -> io::Result<()> {
     let root = match find_repo_root() {
         Some(r) => r,
         None => {
-            eprintln!("Erro: Nenhum repositório Clonaris encontrado.");
+            eprintln!("Error: No Clonaris repository found.");
             std::process::exit(1);
         }
     };
@@ -446,13 +474,13 @@ pub fn cmd_redo() -> io::Result<()> {
     let redo_op = match pop_last_redo(&root)? {
         Some(op) => op,
         None => {
-            println!("Nenhuma operação desfeita para refazer.");
+            println!("No undone operations to redo.");
             return Ok(());
         }
     };
 
     println!(
-        "Refazendo operação: \x1b[1;36m{}\x1b[0m ({})",
+        "Redoing operation: \x1b[1;36m{}\x1b[0m ({})",
         redo_op.action, redo_op.description
     );
 
@@ -467,7 +495,7 @@ pub fn cmd_redo() -> io::Result<()> {
         restore_op_to_log(&root, &redo_op)?;
 
         println!(
-            "✓ Snapshot restabelecido para \x1b[33m{:.8}\x1b[0m",
+            "✓ Snapshot restored to \x1b[33m{:.8}\x1b[0m",
             redo_op.new_head
         );
     }
@@ -475,25 +503,27 @@ pub fn cmd_redo() -> io::Result<()> {
     Ok(())
 }
 
+/// Command: `clonaris ops`
+/// Displays a human-readable chronological timeline table of all operations.
 pub fn cmd_ops() -> io::Result<()> {
     let root = match find_repo_root() {
         Some(r) => r,
         None => {
-            eprintln!("Erro: Nenhum repositório Clonaris encontrado.");
+            eprintln!("Error: No Clonaris repository found.");
             std::process::exit(1);
         }
     };
 
     let ops = read_ops(&root, "oplog")?;
     if ops.is_empty() {
-        println!("Nenhuma operação registrada no histórico ainda.");
+        println!("No operations recorded in transaction log yet.");
         return Ok(());
     }
 
-    println!("\x1b[1mLinha do Tempo de Operações (OpLog):\x1b[0m");
+    println!("\x1b[1mOperation Timeline (OpLog):\x1b[0m");
     println!(
         "{:<4}  {:<19}  {:<8}  {:<10}  {}",
-        "ID", "DATA & HORA (UTC)", "AÇÃO", "SNAPSHOT", "DESCRIÇÃO"
+        "ID", "DATE & TIME (UTC)", "ACTION", "SNAPSHOT", "DESCRIPTION"
     );
     println!("{}", "-".repeat(75));
 
@@ -518,26 +548,30 @@ pub fn cmd_ops() -> io::Result<()> {
     }
 
     println!();
-    println!("Dica: você pode reverter as ações acima com 'clonaris undo'.");
+    println!("Tip: You can revert operations above using 'clonaris undo'.");
     Ok(())
 }
 
+/// Command: `clonaris merge <branch>`
+/// Merges `target_branch` into active branch with non-blocking conflict support.
 pub fn cmd_merge(target_branch: &str) -> io::Result<()> {
     let root = match find_repo_root() {
         Some(r) => r,
         None => {
-            eprintln!("Erro: Nenhum repositório Clonaris encontrado.");
+            eprintln!("Error: No Clonaris repository found.");
             std::process::exit(1);
         }
     };
     execute_merge(&root, target_branch)
 }
 
+/// Command: `clonaris branch [name]`
+/// Lists all existing branches or creates a new branch pointer at current HEAD.
 pub fn cmd_branch(name: Option<&str>) -> io::Result<()> {
     let root = match find_repo_root() {
         Some(r) => r,
         None => {
-            eprintln!("Erro: Nenhum repositório Clonaris encontrado.");
+            eprintln!("Error: No Clonaris repository found.");
             std::process::exit(1);
         }
     };
@@ -548,20 +582,20 @@ pub fn cmd_branch(name: Option<&str>) -> io::Result<()> {
         Some(new_branch) => {
             let trimmed = new_branch.trim();
             if trimmed.is_empty() || trimmed.contains("..") || trimmed.starts_with('/') {
-                eprintln!("Erro: Nome de ramo inválido: '{}'", new_branch);
+                eprintln!("Error: Invalid branch name: '{}'", new_branch);
                 return Ok(());
             }
 
             let branch_file = heads_dir.join(trimmed);
             if branch_file.exists() {
-                eprintln!("Erro: O ramo '{}' já existe.", trimmed);
+                eprintln!("Error: Branch '{}' already exists.", trimmed);
                 return Ok(());
             }
 
             let current_head = match get_head(&root)? {
                 Some(h) => h,
                 None => {
-                    eprintln!("Erro: Não é possível criar um ramo sem ao menos um snapshot salvo.");
+                    eprintln!("Error: Cannot create a branch without at least one snapshot.");
                     return Ok(());
                 }
             };
@@ -571,17 +605,17 @@ pub fn cmd_branch(name: Option<&str>) -> io::Result<()> {
             }
 
             fs::write(&branch_file, format!("{}\n", current_head))?;
-            println!("✓ Ramo '\x1b[1;32m{}\x1b[0m' criado no snapshot {:.8}", trimmed, current_head);
+            println!("✓ Branch '\x1b[1;32m{}\x1b[0m' created at snapshot {:.8}", trimmed, current_head);
         }
         None => {
             let current = get_current_branch(&root);
-            println!("Ramos disponíveis:");
+            println!("Available branches:");
             let mut branches = Vec::new();
             list_branches_recursive(&heads_dir, &heads_dir, &mut branches);
             branches.sort();
             for b_name in branches {
                 if b_name == current {
-                    println!("* \x1b[1;32m{}\x1b[0m (atual)", b_name);
+                    println!("* \x1b[1;32m{}\x1b[0m (active)", b_name);
                 } else {
                     println!("  {}", b_name);
                 }
@@ -607,18 +641,20 @@ fn list_branches_recursive(base_dir: &Path, current_dir: &Path, results: &mut Ve
     }
 }
 
+/// Command: `clonaris switch <branch>`
+/// Switches to `branch_name` with smart data-loss protection for uncommitted changes.
 pub fn cmd_switch(branch_name: &str) -> io::Result<()> {
     let root = match find_repo_root() {
         Some(r) => r,
         None => {
-            eprintln!("Erro: Nenhum repositório Clonaris encontrado.");
+            eprintln!("Error: No Clonaris repository found.");
             std::process::exit(1);
         }
     };
 
     let branch_file = root.join(".clonaris").join("refs").join("heads").join(branch_name);
     if !branch_file.exists() {
-        eprintln!("Erro: O ramo '{}' não foi encontrado.", branch_name);
+        eprintln!("Error: Branch '{}' was not found.", branch_name);
         return Ok(());
     }
 
@@ -651,14 +687,14 @@ pub fn cmd_switch(branch_name: &str) -> io::Result<()> {
         }
 
         if !conflicting_files.is_empty() {
-            eprintln!("\x1b[1;31mErro:\x1b[0m Não é possível alternar de ramo.");
-            eprintln!("Suas alterações locais não salvas nos seguintes arquivos seriam sobrescritas:");
+            eprintln!("\x1b[1;31mError:\x1b[0m Cannot switch branch.");
+            eprintln!("Your uncommitted local changes to the following files would be overwritten:");
             for f in conflicting_files {
                 eprintln!("  ! {}", f);
             }
             eprintln!();
-            eprintln!("Dica: Salve um snapshot antes de alternar ('clonaris save -m \"checkpoint\"')");
-            eprintln!("      ou descarte as alterações locais com 'clonaris discard <arquivo>'.");
+            eprintln!("Tip: Commit your changes first ('clonaris save -m \"checkpoint\"')");
+            eprintln!("     or discard local modifications using 'clonaris discard <file>'.");
             return Ok(());
         }
     }
@@ -680,18 +716,20 @@ pub fn cmd_switch(branch_name: &str) -> io::Result<()> {
         "switch",
         None,
         Some(&target_commit_hash),
-        &format!("Alternou para ramo {}", branch_name),
+        &format!("Switched to branch {}", branch_name),
     )?;
 
-    println!("✓ Alternou para o ramo '\x1b[1;32m{}\x1b[0m' ({:.8})", branch_name, target_commit_hash);
+    println!("✓ Switched to branch '\x1b[1;32m{}\x1b[0m' ({:.8})", branch_name, target_commit_hash);
     Ok(())
 }
 
+/// Command: `clonaris tag [name]`
+/// Lists all tags or creates a new static tag pointing to current HEAD.
 pub fn cmd_tag(name: Option<&str>) -> io::Result<()> {
     let root = match find_repo_root() {
         Some(r) => r,
         None => {
-            eprintln!("Erro: Nenhum repositório Clonaris encontrado.");
+            eprintln!("Error: No Clonaris repository found.");
             std::process::exit(1);
         }
     };
@@ -701,17 +739,17 @@ pub fn cmd_tag(name: Option<&str>) -> io::Result<()> {
             let current_head = match get_head(&root)? {
                 Some(h) => h,
                 None => {
-                    eprintln!("Erro: Não é possível criar uma tag sem commits.");
+                    eprintln!("Error: Cannot create a tag without commits.");
                     return Ok(());
                 }
             };
             create_tag(&root, tag_name, &current_head)?;
-            println!("✓ Tag '\x1b[1;35m{}\x1b[0m' criada no snapshot {:.8}", tag_name, current_head);
+            println!("✓ Tag '\x1b[1;35m{}\x1b[0m' created at snapshot {:.8}", tag_name, current_head);
         }
         None => {
             let tags = list_tags(&root)?;
             if tags.is_empty() {
-                println!("Nenhuma tag criada ainda. Use 'clonaris tag <nome>' para criar uma.");
+                println!("No tags created yet. Use 'clonaris tag <name>' to create one.");
                 return Ok(());
             }
             println!("Tags:");
@@ -723,37 +761,38 @@ pub fn cmd_tag(name: Option<&str>) -> io::Result<()> {
     Ok(())
 }
 
+/// Prints standard help and command usage information.
 pub fn print_help() {
-    println!("\x1b[1mClonaris VCS\x1b[0m - Controle de versão simples, direto e sem atrito");
-    println!("100% Rust Puro (Zero dependências externas)");
+    println!("\x1b[1mClonaris VCS\x1b[0m - Simple, frictionless version control");
+    println!("100% Pure Rust (Zero external dependencies)");
     println!();
-    println!("\x1b[1mUSO:\x1b[0m");
-    println!("    clonaris <COMANDO> [OPÇÕES]");
+    println!("\x1b[1mUSAGE:\x1b[0m");
+    println!("    clonaris <COMMAND> [OPTIONS]");
     println!();
-    println!("\x1b[1mCOMANDOS:\x1b[0m");
-    println!("    init                 Inicializa um novo repositório (.clonaris/)");
-    println!("    status               Mostra o estado atual dos arquivos");
-    println!("    diff [arquivo]       Mostra as alterações linha a linha (com cores)");
-    println!("    save -m \"<msg>\"      Grava um novo snapshot atômico diretamente");
-    println!("    amend -m \"<msg>\"     Atualiza o snapshot mais recente com segurança");
-    println!("    discard <arquivo|.>  Descarta alterações locais em um arquivo ou em tudo");
-    println!("    resolve <arquivo>    Resolve conflitos interativamente (ou use --current / --target)");
-    println!("    log                  Exibe o histórico de snapshots com árvore ASCII");
-    println!("    ops                  Exibe a linha do tempo de operações (OpLog)");
-    println!("    undo                 Desfaz a última operação com segurança");
-    println!("    redo                 Refaz a última operação desfeita");
-    println!("    branch [nome]        Lista os ramos ou cria um novo ramo");
-    println!("    switch <ramo>        Alterna para outro ramo restaurando os arquivos");
-    println!("    merge <ramo>         Mescla outro ramo (com conflitos não-bloqueantes!)");
-    println!("    tag [nome]           Lista as tags ou cria uma tag no snapshot atual");
-    println!("    completion [shell]   Gera script de autocompletar (bash ou zsh)");
-    println!("    help                 Exibe esta ajuda");
+    println!("\x1b[1mCOMMANDS:\x1b[0m");
+    println!("    init                 Initialize a new repository (.clonaris/)");
+    println!("    status               Show working tree status (new, modified, deleted)");
+    println!("    diff [file]          Show line-by-line colored diffs");
+    println!("    save -m \"<msg>\"      Create an atomic snapshot directly (zero staging)");
+    println!("    amend -m \"<msg>\"     Safely update the latest snapshot");
+    println!("    discard <file|.>     Discard uncommitted modifications in files");
+    println!("    resolve <file>       Resolve merge conflict markers interactively");
+    println!("    log                  Display snapshot history with ASCII tree graph");
+    println!("    ops                  Display chronological transaction log (OpLog)");
+    println!("    undo                 Safely revert the latest operation");
+    println!("    redo                 Reapply the latest undone operation");
+    println!("    branch [name]        List branches or create a new branch pointer");
+    println!("    switch <branch>      Switch active branch with data-loss protection");
+    println!("    merge <branch>       Merge another branch (with non-blocking conflicts)");
+    println!("    tag [name]           List tags or create a tag at current snapshot");
+    println!("    completion [shell]   Generate shell autocompletion script (bash or zsh)");
+    println!("    help                 Display this help information");
     println!();
-    println!("\x1b[1mEXEMPLO:\x1b[0m");
+    println!("\x1b[1mEXAMPLE:\x1b[0m");
     println!("    clonaris init");
     println!("    echo 'hello' > index.txt");
-    println!("    clonaris save -m 'Primeiro commit'");
-    println!("    echo 'mudança indesejada' >> index.txt");
+    println!("    clonaris save -m 'Initial commit'");
+    println!("    echo 'unwanted change' >> index.txt");
     println!("    clonaris discard index.txt");
     println!("    clonaris ops");
 }

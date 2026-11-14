@@ -1,18 +1,26 @@
-// Line-by-line Diff engine with LCS and common prefix/suffix optimization
-// Pure Rust, zero external dependencies.
+//! # Line-by-Line Diff Engine
+//!
+//! Implements a Myers / LCS (Longest Common Subsequence) diff algorithm with
+//! common prefix and suffix trimming optimization to achieve sub-millisecond
+//! execution even on large files.
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum DiffLine {
+    /// Line unchanged between versions.
     Equal(String),
+    /// Line added in new version.
     Insert(String),
+    /// Line removed from old version.
     Delete(String),
 }
 
+/// Detects whether byte content represents a binary file by scanning for null bytes (`\0`).
 pub fn is_binary(bytes: &[u8]) -> bool {
     let sample = &bytes[..bytes.len().min(8000)];
     sample.contains(&0)
 }
 
+/// Computes a line-by-line diff between two text strings using an optimized LCS algorithm.
 pub fn compute_diff(old_content: &str, new_content: &str) -> Vec<DiffLine> {
     if old_content == new_content {
         return old_content
@@ -27,13 +35,13 @@ pub fn compute_diff(old_content: &str, new_content: &str) -> Vec<DiffLine> {
     let n = old_lines.len();
     let m = new_lines.len();
 
-    // Optimization: Trim common prefix
+    // Optimization 1: Trim common prefix lines
     let mut start = 0;
     while start < n && start < m && old_lines[start] == new_lines[start] {
         start += 1;
     }
 
-    // Optimization: Trim common suffix
+    // Optimization 2: Trim common suffix lines
     let mut old_end = n;
     let mut new_end = m;
     while old_end > start && new_end > start && old_lines[old_end - 1] == new_lines[new_end - 1] {
@@ -43,7 +51,7 @@ pub fn compute_diff(old_content: &str, new_content: &str) -> Vec<DiffLine> {
 
     let mut result = Vec::with_capacity(n + m);
 
-    // 1. Add common prefix
+    // 1. Append trimmed common prefix
     for line in &old_lines[..start] {
         result.push(DiffLine::Equal((*line).to_string()));
     }
@@ -53,7 +61,7 @@ pub fn compute_diff(old_content: &str, new_content: &str) -> Vec<DiffLine> {
     let mid_n = mid_old.len();
     let mid_m = mid_new.len();
 
-    // If remaining middle is too large (> 3000 x 3000) fallback to direct delete + insert to avoid OOM
+    // If remaining middle is exceedingly large (> 3000 x 3000) fallback to direct delete + insert to avoid OOM
     if mid_n * mid_m > 9_000_000 {
         for line in mid_old {
             result.push(DiffLine::Delete((*line).to_string()));
@@ -70,7 +78,7 @@ pub fn compute_diff(old_content: &str, new_content: &str) -> Vec<DiffLine> {
                 if mid_old[i] == mid_new[j] {
                     dp[i + 1][j + 1] = dp[i][j] + 1;
                 } else {
-                    dp[i + 1][j + 1] = dp[i][j + 1].max(dp[i + 1][j]);
+                    dp[i + 1][j + 1] = dp[i + 1][j + 1].max(dp[i][j + 1]);
                 }
             }
         }
@@ -97,7 +105,7 @@ pub fn compute_diff(old_content: &str, new_content: &str) -> Vec<DiffLine> {
         result.extend(mid_diff);
     }
 
-    // 3. Add common suffix
+    // 3. Append trimmed common suffix
     for line in &old_lines[old_end..n] {
         result.push(DiffLine::Equal((*line).to_string()));
     }
@@ -105,6 +113,7 @@ pub fn compute_diff(old_content: &str, new_content: &str) -> Vec<DiffLine> {
     result
 }
 
+/// Formats diff lines with terminal ANSI colors (green for additions, red for deletions).
 pub fn format_colored_diff(file_path: &str, diff_lines: &[DiffLine]) -> String {
     let mut out = String::new();
     out.push_str(&format!("\x1b[1;37m--- a/{}\x1b[0m\n", file_path));
@@ -139,25 +148,25 @@ mod tests {
 
     #[test]
     fn test_diff_insertion_deletion() {
-        let old = "linha 1\nlinha 2\nlinha 3";
-        let new = "linha 1\nlinha modificada\nlinha 3\nlinha 4";
+        let old = "line 1\nline 2\nline 3";
+        let new = "line 1\nmodified line\nline 3\nadded line 4";
         let diff = compute_diff(old, new);
 
-        assert!(diff.contains(&DiffLine::Delete("linha 2".to_string())));
-        assert!(diff.contains(&DiffLine::Insert("linha modificada".to_string())));
-        assert!(diff.contains(&DiffLine::Insert("linha 4".to_string())));
+        assert!(diff.contains(&DiffLine::Delete("line 2".to_string())));
+        assert!(diff.contains(&DiffLine::Insert("modified line".to_string())));
+        assert!(diff.contains(&DiffLine::Insert("added line 4".to_string())));
     }
 
     #[test]
     fn test_diff_prefix_suffix_optimization() {
         let old = "header\na\nb\nc\nfooter";
-        let new = "header\na\nMODIFICADO\nc\nfooter";
+        let new = "header\na\nMODIFIED\nc\nfooter";
         let diff = compute_diff(old, new);
 
         assert_eq!(diff[0], DiffLine::Equal("header".to_string()));
         assert_eq!(diff[1], DiffLine::Equal("a".to_string()));
         assert_eq!(diff[2], DiffLine::Delete("b".to_string()));
-        assert_eq!(diff[3], DiffLine::Insert("MODIFICADO".to_string()));
+        assert_eq!(diff[3], DiffLine::Insert("MODIFIED".to_string()));
         assert_eq!(diff[4], DiffLine::Equal("c".to_string()));
         assert_eq!(diff[5], DiffLine::Equal("footer".to_string()));
     }

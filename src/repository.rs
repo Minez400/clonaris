@@ -1,8 +1,14 @@
+//! # Repository & Reference Management
+//!
+//! Handles repository discovery, initialization (`.clonaris/` layout), symbolic and
+//! direct HEAD resolution, branch pointer manipulation, and static tags.
+
 use std::env;
 use std::fs;
 use std::io::{self, Error, ErrorKind};
 use std::path::{Path, PathBuf};
 
+/// Climbs up directory ancestors from the current working directory to locate the `.clonaris/` root.
 pub fn find_repo_root() -> Option<PathBuf> {
     let mut current = env::current_dir().ok()?;
     loop {
@@ -16,12 +22,21 @@ pub fn find_repo_root() -> Option<PathBuf> {
     None
 }
 
+/// Initializes a new Clonaris repository in `target_dir`.
+///
+/// Sets up:
+/// - `.clonaris/objects/` (immutable content-addressable store)
+/// - `.clonaris/refs/heads/` (branch references)
+/// - `.clonaris/refs/tags/` (tag references)
+/// - `.clonaris/HEAD` pointing symbolically to `refs/heads/main`
+/// - `.clonaris/config` with default user identity
+/// - `.clonarisignore` with standard default ignore rules
 pub fn init(target_dir: &Path) -> io::Result<()> {
     let clonaris_dir = target_dir.join(".clonaris");
     if clonaris_dir.exists() {
         return Err(Error::new(
             ErrorKind::AlreadyExists,
-            "Repositório Clonaris já existe neste diretório.",
+            "A Clonaris repository already exists in this directory.",
         ));
     }
 
@@ -29,10 +44,10 @@ pub fn init(target_dir: &Path) -> io::Result<()> {
     fs::create_dir_all(clonaris_dir.join("refs").join("heads"))?;
     fs::create_dir_all(clonaris_dir.join("refs").join("tags"))?;
 
-    // Create HEAD pointing to main branch
+    // Create HEAD pointing to default 'main' branch
     fs::write(clonaris_dir.join("HEAD"), "ref: refs/heads/main\n")?;
 
-    // Default configuration
+    // Default user configuration
     let username = env::var("USER").unwrap_or_else(|_| "developer".to_string());
     let default_config = format!(
         "[user]\nname = {}\nemail = {}@localhost\n",
@@ -47,12 +62,18 @@ pub fn init(target_dir: &Path) -> io::Result<()> {
         fs::write(ignore_file, default_ignore)?;
     }
 
-    // Touch oplog
+    // Touch transaction oplog
     fs::write(clonaris_dir.join("oplog"), "")?;
 
     Ok(())
 }
 
+/// Resolves the current HEAD commit hash.
+///
+/// Supports:
+/// - Symbolic reference: `"ref: refs/heads/<branch>"` -> reads target ref file.
+/// - Detached HEAD: direct 64-character commit hash string.
+/// Returns `None` if repository has no commits yet.
 pub fn get_head(repo_root: &Path) -> io::Result<Option<String>> {
     let head_file = repo_root.join(".clonaris").join("HEAD");
     if !head_file.exists() {
@@ -82,6 +103,7 @@ pub fn get_head(repo_root: &Path) -> io::Result<Option<String>> {
     }
 }
 
+/// Updates the current HEAD reference (or the branch it points to) to a new commit hash.
 pub fn set_head(repo_root: &Path, commit_hash: &str) -> io::Result<()> {
     let head_file = repo_root.join(".clonaris").join("HEAD");
     let content = fs::read_to_string(&head_file).unwrap_or_default();
@@ -99,6 +121,7 @@ pub fn set_head(repo_root: &Path, commit_hash: &str) -> io::Result<()> {
     Ok(())
 }
 
+/// Returns the name of the currently active branch (e.g., `"main"`), or `"(detached: abc...)"`.
 pub fn get_current_branch(repo_root: &Path) -> String {
     let head_file = repo_root.join(".clonaris").join("HEAD");
     if let Ok(content) = fs::read_to_string(head_file) {
@@ -112,6 +135,7 @@ pub fn get_current_branch(repo_root: &Path) -> String {
     "main".to_string()
 }
 
+/// Reads the author identity string from `.clonaris/config`, falling back to `$USER`.
 pub fn get_author(repo_root: &Path) -> String {
     let config_path = repo_root.join(".clonaris").join("config");
     if let Ok(content) = fs::read_to_string(config_path) {
@@ -135,6 +159,7 @@ pub fn get_author(repo_root: &Path) -> String {
     format!("{} <{}@localhost>", username, username)
 }
 
+/// Creates a static tag reference pointing to a specific commit hash.
 pub fn create_tag(repo_root: &Path, name: &str, target_hash: &str) -> io::Result<()> {
     let tag_dir = repo_root.join(".clonaris").join("refs").join("tags");
     fs::create_dir_all(&tag_dir)?;
@@ -142,13 +167,14 @@ pub fn create_tag(repo_root: &Path, name: &str, target_hash: &str) -> io::Result
     if tag_file.exists() {
         return Err(Error::new(
             ErrorKind::AlreadyExists,
-            format!("Tag '{}' já existe.", name),
+            format!("Tag '{}' already exists.", name),
         ));
     }
     fs::write(tag_file, format!("{}\n", target_hash))?;
     Ok(())
 }
 
+/// Lists all static tags in the repository sorted alphabetically.
 pub fn list_tags(repo_root: &Path) -> io::Result<Vec<(String, String)>> {
     let tag_dir = repo_root.join(".clonaris").join("refs").join("tags");
     if !tag_dir.exists() {

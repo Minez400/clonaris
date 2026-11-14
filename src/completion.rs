@@ -1,3 +1,8 @@
+//! # Shell Autocompletion Generator
+//!
+//! Generates native completion scripts for Bash and Zsh shells with zero external dependencies.
+//! Provides dynamic autocompletion for commands, options, file paths, and branch names.
+
 pub fn generate_completion(shell: &str) {
     match shell {
         "zsh" => {
@@ -6,23 +11,23 @@ pub fn generate_completion(shell: &str) {
 _clonaris() {
     local -a commands
     commands=(
-        'init:Inicializa um novo repositório (.clonaris/)'
-        'status:Mostra o estado atual dos arquivos'
-        'diff:Mostra as alterações linha a linha (com cores)'
-        'save:Grava um novo snapshot atômico diretamente'
-        'amend:Atualiza o snapshot mais recente com segurança'
-        'discard:Descarta alterações em um arquivo ou em tudo'
-        'resolve:Resolve conflitos de merge interativamente'
-        'log:Exibe o histórico de snapshots com árvore ASCII'
-        'ops:Exibe a linha do tempo de operações (OpLog)'
-        'undo:Desfaz a última operação com segurança'
-        'redo:Refaz a última operação desfeita'
-        'branch:Lista os ramos ou cria um novo ramo'
-        'switch:Alterna entre ramos restaurando os arquivos'
-        'merge:Mescla outro ramo (com conflitos não-bloqueantes!)'
-        'tag:Lista as tags ou cria uma tag no snapshot atual'
-        'completion:Gera script de autocompletar para shell'
-        'help:Exibe ajuda'
+        'init:Initialize a new repository (.clonaris/)'
+        'status:Show working tree status (new, modified, deleted)'
+        'diff:Show line-by-line colored diffs'
+        'save:Create an atomic snapshot directly without staging'
+        'amend:Safely update the latest snapshot'
+        'discard:Discard uncommitted modifications in files'
+        'resolve:Interactively resolve merge conflict markers'
+        'log:Display snapshot history with ASCII tree graph'
+        'ops:Display chronological transaction log (OpLog)'
+        'undo:Safely revert the latest operation'
+        'redo:Reapply the latest undone operation'
+        'branch:List or create branches'
+        'switch:Switch active branch with data-loss protection'
+        'merge:Merge another branch (with non-blocking conflicts)'
+        'tag:List or create static snapshot tags'
+        'completion:Generate shell autocompletion script'
+        'help:Display help information'
     )
 
     _arguments -C \
@@ -31,14 +36,14 @@ _clonaris() {
 
     case $state in
         command)
-            _describe -t commands 'comando do clonaris' commands
+            _describe -t commands 'clonaris command' commands
             ;;
         args)
             case $words[1] in
                 switch|merge)
                     if [ -d ".clonaris/refs/heads" ]; then
                         local branches=(${(f)"$(ls .clonaris/refs/heads 2>/dev/null)"})
-                        _values 'ramos' $branches
+                        _values 'branches' $branches
                     fi
                     ;;
                 diff|discard|resolve)

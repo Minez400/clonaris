@@ -1,3 +1,8 @@
+//! # Clonaris VCS - Command Line Interface Dispatcher
+//!
+//! Main entry point for the Clonaris version control system.
+//! Handles command line argument parsing, Unix SIGPIPE resets, and subcommand dispatching.
+
 mod commands;
 mod completion;
 mod diff;
@@ -11,6 +16,9 @@ mod workspace;
 
 use std::env;
 
+/// On Unix, resets SIGPIPE signal behavior to default (`SIG_DFL`).
+/// This ensures standard pipe behavior when piping output into commands like `head`, `less`, etc.,
+/// terminating gracefully without panicking with `Broken pipe (os error 32)`.
 #[cfg(unix)]
 fn reset_sigpipe() {
     unsafe {
@@ -64,7 +72,7 @@ fn main() {
                 }
             }
             if message.trim().is_empty() {
-                eprintln!("Erro: O comando save requer uma mensagem. Ex: clonaris save -m \"Alterações\"");
+                eprintln!("Error: The 'save' command requires a message. Example: clonaris save -m \"Changes\"");
                 std::process::exit(1);
             }
             commands::cmd_save(&message)
@@ -84,21 +92,21 @@ fn main() {
                 }
             }
             if message.trim().is_empty() {
-                eprintln!("Erro: O comando amend requer uma mensagem. Ex: clonaris amend -m \"Nova mensagem\"");
+                eprintln!("Error: The 'amend' command requires a message. Example: clonaris amend -m \"New message\"");
                 std::process::exit(1);
             }
             commands::cmd_amend(&message)
         }
         "discard" => {
             if args.len() < 3 {
-                eprintln!("Erro: Especifique o arquivo para descartar alterações ou '.' para todas. Ex: clonaris discard main.rs");
+                eprintln!("Error: Specify the file to discard modifications or '.' for all. Example: clonaris discard main.rs");
                 std::process::exit(1);
             }
             commands::cmd_discard(&args[2])
         }
         "resolve" => {
             if args.len() < 3 {
-                eprintln!("Erro: Especifique o arquivo para resolver conflitos. Ex: clonaris resolve main.rs [--current/--target]");
+                eprintln!("Error: Specify the file to resolve conflicts. Example: clonaris resolve main.rs [--current/--target]");
                 std::process::exit(1);
             }
             let strategy = if args.len() > 3 {
@@ -122,14 +130,14 @@ fn main() {
         }
         "switch" => {
             if args.len() < 3 {
-                eprintln!("Erro: Especifique o ramo para o qual deseja alternar. Ex: clonaris switch feature");
+                eprintln!("Error: Specify the branch to switch to. Example: clonaris switch feature");
                 std::process::exit(1);
             }
             commands::cmd_switch(&args[2])
         }
         "merge" => {
             if args.len() < 3 {
-                eprintln!("Erro: Especifique o ramo a ser mesclado. Ex: clonaris merge feature");
+                eprintln!("Error: Specify the branch to merge. Example: clonaris merge feature");
                 std::process::exit(1);
             }
             commands::cmd_merge(&args[2])
@@ -155,14 +163,14 @@ fn main() {
             Ok(())
         }
         unknown => {
-            eprintln!("Comando desconhecido: '{}'", unknown);
-            println!("Execute 'clonaris help' para ver os comandos disponíveis.");
+            eprintln!("Unknown command: '{}'", unknown);
+            println!("Run 'clonaris help' to see available commands.");
             std::process::exit(1);
         }
     };
 
     if let Err(e) = result {
-        eprintln!("\x1b[1;31mErro fatal:\x1b[0m {}", e);
+        eprintln!("\x1b[1;31mFatal error:\x1b[0m {}", e);
         std::process::exit(1);
     }
 }
