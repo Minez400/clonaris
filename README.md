@@ -42,18 +42,31 @@
 
 ---
 
-## 🚀 Installation & Build
+## 🚀 Installation & Multi-Platform Support
 
+Clonaris runs identically across **Linux**, **Windows**, and **macOS**.
+
+### Quick Build from Source
 ```bash
-cd /home/minez400/Projetos/clonaris
+# Standard release build:
 cargo build --release
 
-# Install binary to ~/.local/bin:
+# Statically linked Linux binary (Musl - runs on any Linux distro):
+cargo build --release --target x86_64-unknown-linux-musl
+
+# Install to ~/.local/bin:
 cp target/release/clonaris ~/.local/bin/clonaris
 
 # Activate shell autocompletion (add to ~/.bashrc or ~/.zshrc):
 eval "$(clonaris completion bash)"
 ```
+
+### Automated Multi-Platform CI/CD
+Pre-compiled native binaries are generated automatically via GitHub Actions for every release:
+- 🐧 **Linux x86_64:** `clonaris-linux-x86_64.tar.gz` (glibc) & `clonaris-linux-x86_64-musl.tar.gz` (static)
+- 🪟 **Windows x86_64:** `clonaris-windows-x86_64.zip` (`clonaris.exe`)
+- 🍏 **macOS Apple Silicon (M1-M4):** `clonaris-macos-aarch64.tar.gz`
+- 🍏 **macOS Intel:** `clonaris-macos-x86_64.tar.gz`
 
 ---
 

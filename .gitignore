@@ -1,6 +1,10 @@
 # Rust artifacts
 /target
+/dist
 **/*.rs.bk
+
+# Clonaris internal database
+.clonaris/
 
 # Editor and IDE directories
 .idea/

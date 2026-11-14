@@ -48,7 +48,9 @@ pub fn init(target_dir: &Path) -> io::Result<()> {
     fs::write(clonaris_dir.join("HEAD"), "ref: refs/heads/main\n")?;
 
     // Default user configuration
-    let username = env::var("USER").unwrap_or_else(|_| "developer".to_string());
+    let username = env::var("USER")
+        .or_else(|_| env::var("USERNAME"))
+        .unwrap_or_else(|_| "developer".to_string());
     let default_config = format!(
         "[user]\nname = {}\nemail = {}@localhost\n",
         username, username
@@ -155,7 +157,9 @@ pub fn get_author(repo_root: &Path) -> String {
             return name;
         }
     }
-    let username = env::var("USER").unwrap_or_else(|_| "developer".to_string());
+    let username = env::var("USER")
+        .or_else(|_| env::var("USERNAME"))
+        .unwrap_or_else(|_| "developer".to_string());
     format!("{} <{}@localhost>", username, username)
 }
 
