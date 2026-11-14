@@ -1,1 +1,14 @@
+# Rust artifacts
 /target
+**/*.rs.bk
+
+# Editor and IDE directories
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Logs
+*.log
