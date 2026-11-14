@@ -1,12 +1,15 @@
+use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::io;
+use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::diff::{compute_diff, format_colored_diff, is_binary};
 use crate::merge::execute_merge;
 use crate::objects::{
-    parse_commit, read_object, serialize_commit, serialize_tree, write_object, Commit, TreeEntry,
+    parse_commit, parse_tree, read_object, serialize_commit, serialize_tree, write_object,
+    Commit, TreeEntry,
 };
 use crate::oplog::{
     append_op, pop_last_op, pop_last_redo, push_redo, read_ops, restore_op_to_log,
@@ -502,13 +505,15 @@ pub fn cmd_ops() -> io::Result<()> {
             format!("{:.8}", op.new_head)
         };
 
+        let desc_first_line = op.description.lines().next().unwrap_or("");
+
         println!(
             "#{:<3}  {:<19}  \x1b[1;36m{:<8}\x1b[0m  \x1b[33m{:<10}\x1b[0m  {}",
             i + 1,
             date_str,
             op.action,
             snapshot_short,
-            op.description
+            desc_first_line
         );
     }
 
@@ -541,9 +546,15 @@ pub fn cmd_branch(name: Option<&str>) -> io::Result<()> {
 
     match name {
         Some(new_branch) => {
-            let branch_file = heads_dir.join(new_branch);
+            let trimmed = new_branch.trim();
+            if trimmed.is_empty() || trimmed.contains("..") || trimmed.starts_with('/') {
+                eprintln!("Erro: Nome de ramo inválido: '{}'", new_branch);
+                return Ok(());
+            }
+
+            let branch_file = heads_dir.join(trimmed);
             if branch_file.exists() {
-                eprintln!("Erro: O ramo '{}' já existe.", new_branch);
+                eprintln!("Erro: O ramo '{}' já existe.", trimmed);
                 return Ok(());
             }
 
@@ -555,26 +566,45 @@ pub fn cmd_branch(name: Option<&str>) -> io::Result<()> {
                 }
             };
 
-            fs::write(branch_file, format!("{}\n", current_head))?;
-            println!("✓ Ramo '\x1b[1;32m{}\x1b[0m' criado no snapshot {:.8}", new_branch, current_head);
+            if let Some(parent) = branch_file.parent() {
+                fs::create_dir_all(parent)?;
+            }
+
+            fs::write(&branch_file, format!("{}\n", current_head))?;
+            println!("✓ Ramo '\x1b[1;32m{}\x1b[0m' criado no snapshot {:.8}", trimmed, current_head);
         }
         None => {
             let current = get_current_branch(&root);
             println!("Ramos disponíveis:");
-            if let Ok(entries) = fs::read_dir(heads_dir) {
-                for entry in entries.flatten() {
-                    let b_name = entry.file_name().to_string_lossy().to_string();
-                    if b_name == current {
-                        println!("* \x1b[1;32m{}\x1b[0m (atual)", b_name);
-                    } else {
-                        println!("  {}", b_name);
-                    }
+            let mut branches = Vec::new();
+            list_branches_recursive(&heads_dir, &heads_dir, &mut branches);
+            branches.sort();
+            for b_name in branches {
+                if b_name == current {
+                    println!("* \x1b[1;32m{}\x1b[0m (atual)", b_name);
+                } else {
+                    println!("  {}", b_name);
                 }
             }
         }
     }
 
     Ok(())
+}
+
+fn list_branches_recursive(base_dir: &Path, current_dir: &Path, results: &mut Vec<String>) {
+    if let Ok(entries) = fs::read_dir(current_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                list_branches_recursive(base_dir, &path, results);
+            } else if path.is_file() {
+                if let Ok(rel) = path.strip_prefix(base_dir) {
+                    results.push(rel.to_string_lossy().replace('\\', "/"));
+                }
+            }
+        }
+    }
 }
 
 pub fn cmd_switch(branch_name: &str) -> io::Result<()> {
@@ -590,6 +620,47 @@ pub fn cmd_switch(branch_name: &str) -> io::Result<()> {
     if !branch_file.exists() {
         eprintln!("Erro: O ramo '{}' não foi encontrado.", branch_name);
         return Ok(());
+    }
+
+    let diff = get_status(&root)?;
+    if !diff.is_clean() {
+        // SMART CHECKOUT: Prevent overwriting conflicting uncommitted modifications
+        let target_commit_hash = fs::read_to_string(&branch_file)?.trim().to_string();
+        let commit_data = read_object(&root, &target_commit_hash)?;
+        let commit = parse_commit(&commit_data)?;
+        let target_tree_data = read_object(&root, &commit.tree)?;
+        let target_entries = parse_tree(&target_tree_data)?;
+        let target_map: HashMap<String, String> = target_entries.into_iter().map(|e| (e.path, e.hash)).collect();
+
+        let head_tree = get_head_tree(&root)?;
+        let mut conflicting_files = Vec::new();
+
+        for modified in &diff.modified {
+            if let Some(target_hash) = target_map.get(modified) {
+                let current_head_hash = head_tree.get(modified);
+                if current_head_hash != Some(target_hash) {
+                    conflicting_files.push(modified.clone());
+                }
+            }
+        }
+
+        for added in &diff.added {
+            if target_map.contains_key(added) {
+                conflicting_files.push(added.clone());
+            }
+        }
+
+        if !conflicting_files.is_empty() {
+            eprintln!("\x1b[1;31mErro:\x1b[0m Não é possível alternar de ramo.");
+            eprintln!("Suas alterações locais não salvas nos seguintes arquivos seriam sobrescritas:");
+            for f in conflicting_files {
+                eprintln!("  ! {}", f);
+            }
+            eprintln!();
+            eprintln!("Dica: Salve um snapshot antes de alternar ('clonaris save -m \"checkpoint\"')");
+            eprintln!("      ou descarte as alterações locais com 'clonaris discard <arquivo>'.");
+            return Ok(());
+        }
     }
 
     let target_commit_hash = fs::read_to_string(&branch_file)?.trim().to_string();

@@ -12,6 +12,14 @@ pub struct OpEntry {
     pub description: String,
 }
 
+fn encode_desc(desc: &str) -> String {
+    desc.replace('\\', "\\\\").replace('\n', "\\n").replace('\r', "")
+}
+
+fn decode_desc(desc: &str) -> String {
+    desc.replace("\\n", "\n").replace("\\\\", "\\")
+}
+
 pub fn append_op(
     repo_root: &Path,
     action: &str,
@@ -38,8 +46,9 @@ pub fn append_op(
 
     let prev = prev_head.unwrap_or("none");
     let next = new_head.unwrap_or("none");
+    let safe_desc = encode_desc(description);
 
-    writeln!(file, "{}|{}|{}|{}|{}", now, action, prev, next, description)?;
+    writeln!(file, "{}|{}|{}|{}|{}", now, action, prev, next, safe_desc)?;
     Ok(())
 }
 
@@ -62,7 +71,7 @@ pub fn read_ops(repo_root: &Path, filename: &str) -> io::Result<Vec<OpEntry>> {
                 action: parts[1].to_string(),
                 prev_head: parts[2].to_string(),
                 new_head: parts[3].to_string(),
-                description: parts[4].to_string(),
+                description: decode_desc(parts[4]),
             });
         }
     }
@@ -83,7 +92,11 @@ pub fn pop_op(repo_root: &Path, filename: &str) -> io::Result<Option<OpEntry>> {
     for op in &ops {
         out.push_str(&format!(
             "{}|{}|{}|{}|{}\n",
-            op.timestamp, op.action, op.prev_head, op.new_head, op.description
+            op.timestamp,
+            op.action,
+            op.prev_head,
+            op.new_head,
+            encode_desc(&op.description)
         ));
     }
     fs::write(path, out)?;
@@ -101,7 +114,11 @@ pub fn push_redo(repo_root: &Path, op: &OpEntry) -> io::Result<()> {
     writeln!(
         file,
         "{}|{}|{}|{}|{}",
-        op.timestamp, op.action, op.prev_head, op.new_head, op.description
+        op.timestamp,
+        op.action,
+        op.prev_head,
+        op.new_head,
+        encode_desc(&op.description)
     )?;
     Ok(())
 }
@@ -124,7 +141,11 @@ pub fn restore_op_to_log(repo_root: &Path, op: &OpEntry) -> io::Result<()> {
     writeln!(
         file,
         "{}|{}|{}|{}|{}",
-        op.timestamp, op.action, op.prev_head, op.new_head, op.description
+        op.timestamp,
+        op.action,
+        op.prev_head,
+        op.new_head,
+        encode_desc(&op.description)
     )?;
     Ok(())
 }

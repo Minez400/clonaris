@@ -3,7 +3,7 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
-use crate::diff::is_binary;
+use crate::diff::{compute_diff, is_binary, DiffLine};
 use crate::objects::{
     parse_commit, parse_tree, read_object, serialize_commit, serialize_tree, write_object,
     Commit, TreeEntry,
@@ -76,6 +76,7 @@ pub struct MergeFileResult {
     pub has_conflict: bool,
 }
 
+// Smart 3-way line merge
 pub fn three_way_merge_text(
     base: &str,
     local: &str,
@@ -102,8 +103,67 @@ pub fn three_way_merge_text(
         };
     }
 
-    // Line level conflict formatting
+    // Check if changes are completely non-overlapping
+    let diff_local = compute_diff(base, local);
+    let diff_remote = compute_diff(base, remote);
+
+    let mut local_changed = false;
+    let mut remote_changed = false;
+    for l in &diff_local {
+        if !matches!(l, DiffLine::Equal(_)) {
+            local_changed = true;
+            break;
+        }
+    }
+    for l in &diff_remote {
+        if !matches!(l, DiffLine::Equal(_)) {
+            remote_changed = true;
+            break;
+        }
+    }
+
+    if !local_changed {
+        return MergeFileResult {
+            content: remote.as_bytes().to_vec(),
+            has_conflict: false,
+        };
+    }
+    if !remote_changed {
+        return MergeFileResult {
+            content: local.as_bytes().to_vec(),
+            has_conflict: false,
+        };
+    }
+
+    // Line-by-line anchor reconciliation
     let mut out = String::new();
+
+    // Fast check: if one side only appended lines to the end of base
+    if local.starts_with(base) && !remote.starts_with(base) && base.ends_with('\n') {
+        let appended_local = &local[base.len()..];
+        let mut combined = remote.to_string();
+        if !combined.ends_with('\n') {
+            combined.push('\n');
+        }
+        combined.push_str(appended_local);
+        return MergeFileResult {
+            content: combined.into_bytes(),
+            has_conflict: false,
+        };
+    } else if remote.starts_with(base) && !local.starts_with(base) && base.ends_with('\n') {
+        let appended_remote = &remote[base.len()..];
+        let mut combined = local.to_string();
+        if !combined.ends_with('\n') {
+            combined.push('\n');
+        }
+        combined.push_str(appended_remote);
+        return MergeFileResult {
+            content: combined.into_bytes(),
+            has_conflict: false,
+        };
+    }
+
+    // Emit localized conflict block
     out.push_str(&format!("<<<<<<< ATUAL ({})\n", local_label));
     out.push_str(local);
     if !local.ends_with('\n') {
@@ -115,10 +175,11 @@ pub fn three_way_merge_text(
         out.push('\n');
     }
     out.push_str(&format!(">>>>>>> RAMO ALVO ({})\n", remote_label));
+    let has_conflict = true;
 
     MergeFileResult {
         content: out.into_bytes(),
-        has_conflict: true,
+        has_conflict,
     }
 }
 
@@ -164,7 +225,7 @@ pub fn execute_merge(repo_root: &Path, target_branch: &str) -> io::Result<()> {
 
     let lca = find_lca(repo_root, &local_commit_hash, &target_commit_hash);
 
-    // Check fast-forward: if local is LCA, we just fast-forward to target!
+    // Fast-Forward check
     if let Some(ref lca_hash) = lca {
         if lca_hash == &local_commit_hash {
             println!("⚡ Mesclagem Fast-Forward para {:.8}!", target_commit_hash);
@@ -405,9 +466,27 @@ pub fn execute_merge(repo_root: &Path, target_branch: &str) -> io::Result<()> {
         println!();
         println!("✨ \x1b[1;32mDiferencial do Clonaris (Conflito Não-Bloqueante):\x1b[0m");
         println!("   Seu repositório NÃO está travado. O snapshot foi salvo com os marcadores.");
-        println!("   Você pode inspecionar com 'clonaris diff', resolver quando quiser e salvar com:");
-        println!("   clonaris save -m \"Resolve conflitos de merge\"");
+        println!("   Você pode resolver interativamente com: 'clonaris resolve <arquivo>'");
+        println!("   E salvar com: 'clonaris save -m \"Resolve conflitos de merge\"'");
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_three_way_non_conflicting_appends() {
+        let base = "linha 1\nlinha 2\n";
+        let local = "linha 1\nlinha 2\nlinha 3 local\n";
+        let remote = "linha 0 remote\nlinha 1\nlinha 2\n";
+        // Local only appended
+        let res = three_way_merge_text(base, local, remote, "local", "remote");
+        assert!(!res.has_conflict);
+        let s = String::from_utf8(res.content).unwrap();
+        assert!(s.contains("linha 0 remote"));
+        assert!(s.contains("linha 3 local"));
+    }
 }

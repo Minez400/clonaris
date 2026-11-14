@@ -32,9 +32,14 @@ pub fn write_object(repo_root: &Path, data: &[u8]) -> io::Result<String> {
         fs::create_dir_all(parent)?;
     }
 
-    // Only write if it does not exist yet (immutable content-addressed store)
+    // Atomic write: write to temp file then rename, preventing corrupted half-written files
     if !path.exists() {
-        fs::write(&path, data)?;
+        let tmp_file = path.with_extension(format!("tmp_{}", std::process::id()));
+        fs::write(&tmp_file, data)?;
+        if let Err(e) = fs::rename(&tmp_file, &path) {
+            let _ = fs::remove_file(&tmp_file);
+            return Err(e);
+        }
     }
 
     Ok(hash)
@@ -45,7 +50,7 @@ pub fn read_object(repo_root: &Path, hash: &str) -> io::Result<Vec<u8>> {
     if !path.exists() {
         return Err(Error::new(
             ErrorKind::NotFound,
-            format!("Object {} not found", hash),
+            format!("Objeto {} não encontrado no repositório", hash),
         ));
     }
     fs::read(&path)
