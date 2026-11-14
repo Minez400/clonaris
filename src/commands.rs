@@ -11,7 +11,10 @@ use std::io;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::cherry_pick;
 use crate::diff::{compute_diff, format_colored_diff, is_binary};
+use crate::doctor;
+use crate::git_bridge;
 use crate::merge::execute_merge;
 use crate::objects::{
     parse_commit, parse_tree, read_object, serialize_commit, serialize_tree, write_object,
@@ -20,10 +23,12 @@ use crate::objects::{
 use crate::oplog::{
     append_op, pop_last_op, pop_last_redo, push_redo, read_ops, restore_op_to_log,
 };
+use crate::remote;
 use crate::repository::{
     create_tag, find_repo_root, get_author, get_current_branch, get_head, init, list_tags,
     set_head,
 };
+use crate::stash;
 use crate::workspace::{
     discard_file, get_head_tree, get_status, restore_tree, save, scan_workspace_files,
 };
@@ -761,6 +766,253 @@ pub fn cmd_tag(name: Option<&str>) -> io::Result<()> {
     Ok(())
 }
 
+/// Command: `clonaris remote [add|remove|list] ...`
+/// Manages remote repository endpoints.
+pub fn cmd_remote(subcmd: Option<&str>, arg1: Option<&str>, arg2: Option<&str>) -> io::Result<()> {
+    let root = match find_repo_root() {
+        Some(r) => r,
+        None => {
+            eprintln!("Error: No Clonaris repository found in this directory or any parent.");
+            std::process::exit(1);
+        }
+    };
+
+    match subcmd {
+        None | Some("list") => {
+            let remotes = remote::list_remotes(&root)?;
+            if remotes.is_empty() {
+                println!("No remotes configured.");
+                println!("Tip: Add one with 'clonaris remote add origin <url>'");
+            } else {
+                println!("\x1b[1mConfigured remotes:\x1b[0m");
+                for r in remotes {
+                    println!("  \x1b[1;36m{:<12}\x1b[0m {}", r.name, r.url);
+                }
+            }
+        }
+        Some("add") => {
+            let name = match arg1 {
+                Some(n) => n,
+                None => {
+                    eprintln!("Error: Missing remote name. Example: clonaris remote add origin git@github.com:user/repo.git");
+                    std::process::exit(1);
+                }
+            };
+            let url = match arg2 {
+                Some(u) => u,
+                None => {
+                    eprintln!("Error: Missing remote URL. Example: clonaris remote add origin git@github.com:user/repo.git");
+                    std::process::exit(1);
+                }
+            };
+            remote::add_remote(&root, name, url)
+                .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+            println!("✓ Added remote '{}' -> {}", name, url);
+        }
+        Some("remove") | Some("rm") => {
+            let name = match arg1 {
+                Some(n) => n,
+                None => {
+                    eprintln!("Error: Missing remote name. Example: clonaris remote remove origin");
+                    std::process::exit(1);
+                }
+            };
+            remote::remove_remote(&root, name)
+                .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+            println!("✓ Removed remote '{}'", name);
+        }
+        Some(unknown) => {
+            eprintln!("Error: Unknown remote action '{}'. Available: list, add, remove", unknown);
+            std::process::exit(1);
+        }
+    }
+    Ok(())
+}
+
+/// Command: `clonaris push [remote] [branch]`
+/// Synchronizes local commits to the remote GitHub/Git server.
+pub fn cmd_push(remote: Option<&str>, branch: Option<&str>, set_upstream: bool) -> io::Result<()> {
+    let root = match find_repo_root() {
+        Some(r) => r,
+        None => {
+            eprintln!("Error: No Clonaris repository found in this directory or any parent.");
+            std::process::exit(1);
+        }
+    };
+
+    let remote_name = remote.unwrap_or("origin");
+    let current_branch = get_current_branch(&root);
+    let branch_name = branch.unwrap_or(&current_branch);
+
+    git_bridge::push(&root, remote_name, branch_name, set_upstream)
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+    Ok(())
+}
+
+/// Command: `clonaris pull [remote] [branch]`
+/// Fetches updates from the remote server and merges or fast-forwards into current branch.
+pub fn cmd_pull(remote: Option<&str>, branch: Option<&str>) -> io::Result<()> {
+    let root = match find_repo_root() {
+        Some(r) => r,
+        None => {
+            eprintln!("Error: No Clonaris repository found in this directory or any parent.");
+            std::process::exit(1);
+        }
+    };
+
+    let remote_name = remote.unwrap_or("origin");
+    let current_branch = get_current_branch(&root);
+    let branch_name = branch.unwrap_or(&current_branch);
+
+    git_bridge::pull(&root, remote_name, branch_name)
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+    Ok(())
+}
+
+/// Command: `clonaris clone <url> [destination]`
+/// Clones a remote repository and initializes Clonaris environment.
+pub fn cmd_clone(url: &str, destination: Option<&str>) -> io::Result<()> {
+    let dest_path = destination.map(Path::new);
+    git_bridge::clone_repo(url, dest_path)
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+    Ok(())
+}
+
+/// Command: `clonaris stash [push|pop|list|apply|drop]`
+/// Manages lightweight local stashes.
+pub fn cmd_stash(subcmd: Option<&str>, arg: Option<&str>) -> io::Result<()> {
+    let root = match find_repo_root() {
+        Some(r) => r,
+        None => {
+            eprintln!("Error: No Clonaris repository found in this directory or any parent.");
+            std::process::exit(1);
+        }
+    };
+
+    match subcmd {
+        None | Some("push") => {
+            let res = stash::push_stash(&root, arg)
+                .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+            println!("✓ {}", res);
+        }
+        Some("list") => {
+            let stashes = stash::list_stashes(&root)?;
+            if stashes.is_empty() {
+                println!("No stashes saved.");
+            } else {
+                println!("\x1b[1mSaved stashes:\x1b[0m");
+                for s in stashes {
+                    println!(
+                        "  \x1b[1;33mstash@{{{}}}\x1b[0m [{}] (\x1b[32m{}\x1b[0m) {}",
+                        s.index,
+                        format_timestamp(s.timestamp),
+                        s.branch,
+                        s.message
+                    );
+                }
+            }
+        }
+        Some("pop") => {
+            let idx = arg.and_then(|s| s.parse::<usize>().ok()).unwrap_or(0);
+            let res = stash::pop_stash(&root, idx)
+                .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+            println!("✓ {}", res);
+        }
+        Some("apply") => {
+            let idx = arg.and_then(|s| s.parse::<usize>().ok()).unwrap_or(0);
+            let res = stash::apply_stash(&root, idx)
+                .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+            println!("✓ {}", res);
+        }
+        Some("drop") => {
+            let idx = arg.and_then(|s| s.parse::<usize>().ok()).unwrap_or(0);
+            let res = stash::drop_stash(&root, idx)
+                .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+            println!("✓ {}", res);
+        }
+        Some(other) => {
+            // If user typed: clonaris stash "my message", treat as push message
+            let res = stash::push_stash(&root, Some(other))
+                .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+            println!("✓ {}", res);
+        }
+    }
+    Ok(())
+}
+
+/// Command: `clonaris cherry-pick <commit>`
+/// Applies the delta from a commit onto the current branch.
+pub fn cmd_cherry_pick(commit_hash: &str) -> io::Result<()> {
+    let root = match find_repo_root() {
+        Some(r) => r,
+        None => {
+            eprintln!("Error: No Clonaris repository found in this directory or any parent.");
+            std::process::exit(1);
+        }
+    };
+
+    let res = cherry_pick::cherry_pick(&root, commit_hash)
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+    println!("{}", res);
+    Ok(())
+}
+
+/// Command: `clonaris doctor`
+/// Performs a full repository integrity and health audit.
+pub fn cmd_doctor() -> io::Result<()> {
+    let root = match find_repo_root() {
+        Some(r) => r,
+        None => {
+            eprintln!("Error: No Clonaris repository found in this directory or any parent.");
+            std::process::exit(1);
+        }
+    };
+
+    println!("🩺 Running Clonaris repository health audit...");
+    let report = doctor::run_doctor(&root)
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+
+    println!("\x1b[1mAudit Results:\x1b[0m");
+    println!("  Total CAS Objects:   {}", report.total_objects);
+    println!("  Verified SHA-256:    \x1b[32m{}\x1b[0m", report.verified_objects);
+    println!("  Valid Branches:      {}", report.valid_branches);
+    println!("  Valid Tags:          {}", report.valid_tags);
+    println!("  Repository Size:     {:.2} KB", (report.total_bytes as f64) / 1024.0);
+
+    if report.corrupted_objects.is_empty() {
+        println!("\n\x1b[1;32m✓ Repository is in perfect health. Zero corrupted objects found.\x1b[0m");
+    } else {
+        println!("\n\x1b[1;31m⚠️ Detected {} corruption issues:\x1b[0m", report.corrupted_objects.len());
+        for err in report.corrupted_objects {
+            println!("  ! {}", err);
+        }
+    }
+    Ok(())
+}
+
+/// Command: `clonaris gc`
+/// Prunes unreachable objects to reclaim disk space.
+pub fn cmd_gc() -> io::Result<()> {
+    let root = match find_repo_root() {
+        Some(r) => r,
+        None => {
+            eprintln!("Error: No Clonaris repository found in this directory or any parent.");
+            std::process::exit(1);
+        }
+    };
+
+    println!("🧹 Running generational garbage collection...");
+    let report = doctor::run_gc(&root)
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+
+    println!("\x1b[1mGarbage Collection Results:\x1b[0m");
+    println!("  Reachable Objects:   {}", report.reachable_objects);
+    println!("  Pruned Objects:      \x1b[32m{}\x1b[0m", report.pruned_objects);
+    println!("  Reclaimed Disk Space: {:.2} KB", (report.reclaimed_bytes as f64) / 1024.0);
+    println!("\n\x1b[1;32m✓ Repository successfully optimized and clean.\x1b[0m");
+    Ok(())
+}
+
 /// Prints standard help and command usage information.
 pub fn print_help() {
     println!("\x1b[1mClonaris VCS\x1b[0m - Simple, frictionless version control");
@@ -769,7 +1021,7 @@ pub fn print_help() {
     println!("\x1b[1mUSAGE:\x1b[0m");
     println!("    clonaris <COMMAND> [OPTIONS]");
     println!();
-    println!("\x1b[1mCOMMANDS:\x1b[0m");
+    println!("\x1b[1mCORE COMMANDS:\x1b[0m");
     println!("    init                 Initialize a new repository (.clonaris/)");
     println!("    status               Show working tree status (new, modified, deleted)");
     println!("    diff [file]          Show line-by-line colored diffs");
@@ -777,14 +1029,26 @@ pub fn print_help() {
     println!("    amend -m \"<msg>\"     Safely update the latest snapshot");
     println!("    discard <file|.>     Discard uncommitted modifications in files");
     println!("    resolve <file>       Resolve merge conflict markers interactively");
-    println!("    log                  Display snapshot history with ASCII tree graph");
-    println!("    ops                  Display chronological transaction log (OpLog)");
-    println!("    undo                 Safely revert the latest operation");
-    println!("    redo                 Reapply the latest undone operation");
     println!("    branch [name]        List branches or create a new branch pointer");
     println!("    switch <branch>      Switch active branch with data-loss protection");
     println!("    merge <branch>       Merge another branch (with non-blocking conflicts)");
     println!("    tag [name]           List tags or create a tag at current snapshot");
+    println!("    log                  Display snapshot history with ASCII tree graph");
+    println!("    ops                  Display chronological transaction log (OpLog)");
+    println!("    undo                 Safely revert the latest operation");
+    println!("    redo                 Reapply the latest undone operation");
+    println!();
+    println!("\x1b[1mREMOTE & GITHUB SYNC:\x1b[0m");
+    println!("    remote [add|rm|list] Manage remote repository endpoints");
+    println!("    push [remote] [br]   Push snapshots to GitHub / remote Git server");
+    println!("    pull [remote] [br]   Pull and merge updates from GitHub / remote");
+    println!("    clone <url> [dir]    Clone remote repository and initialize Clonaris");
+    println!();
+    println!("\x1b[1mDEVELOPER SUPERPOWERS:\x1b[0m");
+    println!("    stash [push|pop|list] Save/restore uncommitted changes instantly");
+    println!("    cherry-pick <commit> Apply specific commit delta onto current branch");
+    println!("    doctor               Deep repository health and integrity audit");
+    println!("    gc                   Generational garbage collection (reclaim space)");
     println!("    completion [shell]   Generate shell autocompletion script (bash or zsh)");
     println!("    help                 Display this help information");
     println!();
@@ -792,9 +1056,8 @@ pub fn print_help() {
     println!("    clonaris init");
     println!("    echo 'hello' > index.txt");
     println!("    clonaris save -m 'Initial commit'");
-    println!("    echo 'unwanted change' >> index.txt");
-    println!("    clonaris discard index.txt");
-    println!("    clonaris ops");
+    println!("    clonaris remote add origin git@github.com:user/repo.git");
+    println!("    clonaris push -u origin main");
 }
 
 fn format_timestamp(timestamp: u64) -> String {

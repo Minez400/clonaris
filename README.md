@@ -46,6 +46,7 @@ eval "$(clonaris completion bash)"
 
 ## 🛠️ Command Reference
 
+### Core Workflow
 | Command | Description |
 | :--- | :--- |
 | `clonaris init` | Initialize an empty repository with default branch `main`. |
@@ -56,15 +57,31 @@ eval "$(clonaris completion bash)"
 | `clonaris discard <file\|.>` | Discard uncommitted modifications in a specific file or all files. |
 | `clonaris resolve <file>` | Resolve merge conflict markers interactively (`--current` or `--target`). |
 | `clonaris merge <branch>` | Merge another branch with 3-way reconciliation and non-blocking conflicts. |
+| `clonaris branch [name]` | List branches or create a new branch pointer (`feature/login` supported). |
+| `clonaris switch <branch>` | Switch active branch with data-loss protection (Smart Checkout). |
+| `clonaris tag [name]` | List tags or create an immutable static tag (`v1.0.0`). |
 | `clonaris log` | Display snapshot history with an ASCII graph tree. |
 | `clonaris ops` | Display the chronological transaction log (alternative to `reflog`). |
 | `clonaris undo` | Safely revert the latest operation and restore disk files. |
 | `clonaris redo` | Reapply the most recently undone operation. |
-| `clonaris branch [name]` | List branches or create a new branch pointer (`feature/login` supported). |
-| `clonaris switch <branch>` | Switch active branch with data-loss protection (Smart Checkout). |
-| `clonaris tag [name]` | List tags or create an immutable static tag (`v1.0.0`). |
+
+### 🌐 GitHub & Remote Synchronization
+| Command | Description |
+| :--- | :--- |
+| `clonaris remote [add\|rm\|list]` | Configure and list remote endpoints (`origin`, `upstream`). |
+| `clonaris push [-u] [remote] [branch]` | Export snapshots and push to GitHub, GitLab, or remote Git servers. |
+| `clonaris pull [remote] [branch]` | Fetch remote updates and merge or fast-forward active branch. |
+| `clonaris clone <url> [destination]` | Clone remote repository and bootstrap Clonaris environment instantly. |
+
+### ⚡ Developer Superpowers
+| Command | Description |
+| :--- | :--- |
+| `clonaris stash [push\|pop\|list\|drop]` | Save uncommitted changes to lightweight shelves for fast context switching. |
+| `clonaris cherry-pick <commit>` | Apply changes from a specific commit onto the current active branch. |
+| `clonaris doctor` | Full integrity audit: recomputes SHA-256 for all CAS objects and validates refs. |
+| `clonaris gc` | Generational garbage collection: prunes orphaned objects and reclaims disk space. |
 | `clonaris completion [shell]` | Generate shell autocompletion script (`bash` or `zsh`). |
-| `clonaris help` | Display help and usage information. |
+| `clonaris help` | Display comprehensive help and usage information. |
 
 ---
 
@@ -72,46 +89,71 @@ eval "$(clonaris completion bash)"
 
 ```text
 .clonaris/
-├── config        # User identity configuration (name and email)
+├── config        # Identity ([user]) and remotes ([remote "origin"])
 ├── HEAD          # Symbolic reference (e.g., ref: refs/heads/main)
 ├── oplog         # Append-only transaction log for `clonaris ops` and `undo`
 ├── redolog       # Undone operations stack for `clonaris redo`
 ├── objects/      # Content-Addressed Store for Blobs, Trees, and Commits (SHA-256)
 │   ├── b0/
 │   │   └── 2d20...
+├── stashes/      # Saved stash metadata files (`stash_<timestamp>.stash`)
 └── refs/
-    ├── heads/    # Branch pointers storing snapshot hashes
-    │   ├── main
-    │   └── feature/auth
-    └── tags/     # Static tag pointers (e.g., v1.0.0)
+    ├── heads/    # Branch pointers storing snapshot hashes (e.g. main, feature/auth)
+    ├── tags/     # Static tag pointers (e.g., v1.0.0)
+    └── remotes/  # Remote tracking branches (e.g. origin/main)
 ```
 
 ---
 
-## 🧪 Usage Example
+## 🧪 Usage Examples
 
+### 1. Basic Workflow
 ```bash
-# 1. Initialize
+# Initialize and commit
 clonaris init
-
-# 2. Create and commit directly
 echo "fn main() {}" > main.rs
-clonaris status
 clonaris save -m "Initial commit"
 clonaris tag v1.0.0
 
-# 3. Create a hierarchical feature branch
+# Create and switch branches
 clonaris branch feature/login
 clonaris switch feature/login
 echo "fn login() {}" >> main.rs
 clonaris save -m "Add login functionality"
 
-# 4. Switch back to main and merge
+# Switch back and merge
 clonaris switch main
 clonaris merge feature/login
+```
 
-# 5. Inspect timeline and undo/redo
-clonaris ops
-clonaris undo
-clonaris redo
+### 2. GitHub Synchronization
+```bash
+# Configure remote
+clonaris remote add origin git@github.com:username/my-project.git
+
+# Push current branch to GitHub
+clonaris push -u origin main
+
+# Pull remote changes from team members
+clonaris pull origin main
+```
+
+### 3. Developer Superpowers: Stash & Cherry-Pick
+```bash
+# Temporarily stash unfinished work
+echo "WIP changes" >> main.rs
+clonaris stash push "Unfinished experiment"
+
+# Verify workspace is clean
+clonaris status
+
+# Pop stash back when ready
+clonaris stash pop
+
+# Cherry-pick a specific fix from another branch
+clonaris cherry-pick 4a8f9c12
+
+# Run health doctor and garbage collection
+clonaris doctor
+clonaris gc
 ```
