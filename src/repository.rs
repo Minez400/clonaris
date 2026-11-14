@@ -27,6 +27,7 @@ pub fn init(target_dir: &Path) -> io::Result<()> {
 
     fs::create_dir_all(clonaris_dir.join("objects"))?;
     fs::create_dir_all(clonaris_dir.join("refs").join("heads"))?;
+    fs::create_dir_all(clonaris_dir.join("refs").join("tags"))?;
 
     // Create HEAD pointing to main branch
     fs::write(clonaris_dir.join("HEAD"), "ref: refs/heads/main\n")?;
@@ -132,4 +133,35 @@ pub fn get_author(repo_root: &Path) -> String {
     }
     let username = env::var("USER").unwrap_or_else(|_| "developer".to_string());
     format!("{} <{}@localhost>", username, username)
+}
+
+pub fn create_tag(repo_root: &Path, name: &str, target_hash: &str) -> io::Result<()> {
+    let tag_dir = repo_root.join(".clonaris").join("refs").join("tags");
+    fs::create_dir_all(&tag_dir)?;
+    let tag_file = tag_dir.join(name);
+    if tag_file.exists() {
+        return Err(Error::new(
+            ErrorKind::AlreadyExists,
+            format!("Tag '{}' já existe.", name),
+        ));
+    }
+    fs::write(tag_file, format!("{}\n", target_hash))?;
+    Ok(())
+}
+
+pub fn list_tags(repo_root: &Path) -> io::Result<Vec<(String, String)>> {
+    let tag_dir = repo_root.join(".clonaris").join("refs").join("tags");
+    if !tag_dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut tags = Vec::new();
+    for entry in fs::read_dir(tag_dir)? {
+        let entry = entry?;
+        let name = entry.file_name().to_string_lossy().to_string();
+        let hash = fs::read_to_string(entry.path())?.trim().to_string();
+        tags.push((name, hash));
+    }
+    tags.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(tags)
 }

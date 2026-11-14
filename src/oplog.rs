@@ -19,6 +19,12 @@ pub fn append_op(
     new_head: Option<&str>,
     description: &str,
 ) -> io::Result<()> {
+    // When a new action is performed, clear the redo log
+    let redo_path = repo_root.join(".clonaris").join("redolog");
+    if redo_path.exists() {
+        let _ = fs::write(&redo_path, "");
+    }
+
     let oplog_path = repo_root.join(".clonaris").join("oplog");
     let mut file = OpenOptions::new()
         .create(true)
@@ -37,13 +43,13 @@ pub fn append_op(
     Ok(())
 }
 
-pub fn read_ops(repo_root: &Path) -> io::Result<Vec<OpEntry>> {
-    let oplog_path = repo_root.join(".clonaris").join("oplog");
-    if !oplog_path.exists() {
+pub fn read_ops(repo_root: &Path, filename: &str) -> io::Result<Vec<OpEntry>> {
+    let path = repo_root.join(".clonaris").join(filename);
+    if !path.exists() {
         return Ok(Vec::new());
     }
 
-    let file = fs::File::open(oplog_path)?;
+    let file = fs::File::open(path)?;
     let reader = BufReader::new(file);
     let mut entries = Vec::new();
 
@@ -64,13 +70,13 @@ pub fn read_ops(repo_root: &Path) -> io::Result<Vec<OpEntry>> {
     Ok(entries)
 }
 
-pub fn pop_last_op(repo_root: &Path) -> io::Result<Option<OpEntry>> {
-    let oplog_path = repo_root.join(".clonaris").join("oplog");
-    if !oplog_path.exists() {
+pub fn pop_op(repo_root: &Path, filename: &str) -> io::Result<Option<OpEntry>> {
+    let path = repo_root.join(".clonaris").join(filename);
+    if !path.exists() {
         return Ok(None);
     }
 
-    let mut ops = read_ops(repo_root)?;
+    let mut ops = read_ops(repo_root, filename)?;
     let last = ops.pop();
 
     let mut out = String::new();
@@ -80,7 +86,45 @@ pub fn pop_last_op(repo_root: &Path) -> io::Result<Option<OpEntry>> {
             op.timestamp, op.action, op.prev_head, op.new_head, op.description
         ));
     }
-    fs::write(oplog_path, out)?;
+    fs::write(path, out)?;
 
     Ok(last)
+}
+
+pub fn push_redo(repo_root: &Path, op: &OpEntry) -> io::Result<()> {
+    let redo_path = repo_root.join(".clonaris").join("redolog");
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(redo_path)?;
+
+    writeln!(
+        file,
+        "{}|{}|{}|{}|{}",
+        op.timestamp, op.action, op.prev_head, op.new_head, op.description
+    )?;
+    Ok(())
+}
+
+pub fn pop_last_op(repo_root: &Path) -> io::Result<Option<OpEntry>> {
+    pop_op(repo_root, "oplog")
+}
+
+pub fn pop_last_redo(repo_root: &Path) -> io::Result<Option<OpEntry>> {
+    pop_op(repo_root, "redolog")
+}
+
+pub fn restore_op_to_log(repo_root: &Path, op: &OpEntry) -> io::Result<()> {
+    let oplog_path = repo_root.join(".clonaris").join("oplog");
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(oplog_path)?;
+
+    writeln!(
+        file,
+        "{}|{}|{}|{}|{}",
+        op.timestamp, op.action, op.prev_head, op.new_head, op.description
+    )?;
+    Ok(())
 }

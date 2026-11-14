@@ -2,12 +2,15 @@ use std::env;
 use std::fs;
 use std::io;
 
+use crate::diff::{compute_diff, format_colored_diff, is_binary};
 use crate::objects::{parse_commit, read_object};
-use crate::oplog::{append_op, pop_last_op};
-use crate::repository::{
-    find_repo_root, get_current_branch, get_head, init, set_head,
+use crate::oplog::{
+    append_op, pop_last_op, pop_last_redo, push_redo, restore_op_to_log,
 };
-use crate::workspace::{get_status, restore_tree, save};
+use crate::repository::{
+    create_tag, find_repo_root, get_current_branch, get_head, init, list_tags, set_head,
+};
+use crate::workspace::{get_head_tree, get_status, restore_tree, save};
 
 pub fn cmd_init() -> io::Result<()> {
     let current = env::current_dir()?;
@@ -65,7 +68,100 @@ pub fn cmd_status() -> io::Result<()> {
     }
 
     println!();
-    println!("Use 'clonaris save -m \"mensagem\"' para gravar o snapshot diretamente.");
+    println!("Execute 'clonaris diff' para ver as alterações linha a linha.");
+    println!("Execute 'clonaris save -m \"mensagem\"' para gravar o snapshot diretamente.");
+    Ok(())
+}
+
+pub fn cmd_diff(target_file: Option<&str>) -> io::Result<()> {
+    let root = match find_repo_root() {
+        Some(r) => r,
+        None => {
+            eprintln!("Erro: Nenhum repositório Clonaris encontrado.");
+            std::process::exit(1);
+        }
+    };
+
+    let diff = get_status(&root)?;
+    let head_tree = get_head_tree(&root)?;
+
+    if diff.is_clean() {
+        println!("Nenhuma alteração para exibir diff.");
+        return Ok(());
+    }
+
+    let mut printed_anything = false;
+
+    // Modified files
+    for file in &diff.modified {
+        if let Some(target) = target_file {
+            if file != target {
+                continue;
+            }
+        }
+
+        printed_anything = true;
+        let old_hash = head_tree.get(file).unwrap();
+        let old_bytes = read_object(&root, old_hash)?;
+        let new_bytes = fs::read(root.join(file))?;
+
+        if is_binary(&old_bytes) || is_binary(&new_bytes) {
+            println!("\x1b[1;33mArquivo binário {} difere do snapshot anterior\x1b[0m", file);
+            continue;
+        }
+
+        let old_text = String::from_utf8_lossy(&old_bytes);
+        let new_text = String::from_utf8_lossy(&new_bytes);
+
+        let lines = compute_diff(&old_text, &new_text);
+        print!("{}", format_colored_diff(file, &lines));
+    }
+
+    // Added files
+    for file in &diff.added {
+        if let Some(target) = target_file {
+            if file != target {
+                continue;
+            }
+        }
+
+        printed_anything = true;
+        let new_bytes = fs::read(root.join(file))?;
+        if is_binary(&new_bytes) {
+            println!("\x1b[1;32mNovo arquivo binário adicionado: {}\x1b[0m", file);
+            continue;
+        }
+
+        let new_text = String::from_utf8_lossy(&new_bytes);
+        let lines = compute_diff("", &new_text);
+        print!("{}", format_colored_diff(file, &lines));
+    }
+
+    // Deleted files
+    for file in &diff.deleted {
+        if let Some(target) = target_file {
+            if file != target {
+                continue;
+            }
+        }
+
+        printed_anything = true;
+        let old_hash = head_tree.get(file).unwrap();
+        let old_bytes = read_object(&root, old_hash)?;
+        if is_binary(&old_bytes) {
+            println!("\x1b[1;31mArquivo binário excluído: {}\x1b[0m", file);
+            continue;
+        }
+
+        let old_text = String::from_utf8_lossy(&old_bytes);
+        let lines = compute_diff(&old_text, "");
+        print!("{}", format_colored_diff(file, &lines));
+    }
+
+    if !printed_anything && target_file.is_some() {
+        println!("O arquivo '{}' não possui alterações pendentes.", target_file.unwrap());
+    }
+
     Ok(())
 }
 
@@ -119,7 +215,7 @@ pub fn cmd_log() -> io::Result<()> {
     let mut current_hash = match get_head(&root)? {
         Some(h) => h,
         None => {
-            println!("Nenhum commit encontrado neste repositório.");
+            println!("Nenhum snapshot encontrado neste repositório.");
             return Ok(());
         }
     };
@@ -138,15 +234,15 @@ pub fn cmd_log() -> io::Result<()> {
 
         let date_str = format_timestamp(commit.timestamp);
 
-        println!("\x1b[33m● Commit: {}\x1b[0m", current_hash);
-        println!("  Autor:     {}", commit.author);
-        println!("  Data:      {}", date_str);
-        println!("  Árvore:    {:.8}", commit.tree);
-        println!();
+        println!("\x1b[33m*   commit {}\x1b[0m", current_hash);
+        println!("|   Autor:     {}", commit.author);
+        println!("|   Data:      {}", date_str);
+        println!("|   Árvore:    {:.8}", commit.tree);
+        println!("|");
         for line in commit.message.lines() {
-            println!("    {}", line);
+            println!("|       {}", line);
         }
-        println!();
+        println!("|");
 
         count += 1;
         if let Some(parent) = commit.parents.first() {
@@ -182,6 +278,9 @@ pub fn cmd_undo() -> io::Result<()> {
         last_op.action, last_op.description
     );
 
+    // Push into redo stack before reverting
+    push_redo(&root, &last_op)?;
+
     if last_op.prev_head == "none" {
         // Revert to pristine state (before first commit)
         let head_ref = root.join(".clonaris").join("refs").join("heads").join("main");
@@ -198,6 +297,48 @@ pub fn cmd_undo() -> io::Result<()> {
         println!(
             "✓ Snapshot restaurado com sucesso para \x1b[33m{:.8}\x1b[0m",
             last_op.prev_head
+        );
+    }
+
+    println!("Dica: use 'clonaris redo' se quiser refazer esta alteração.");
+    Ok(())
+}
+
+pub fn cmd_redo() -> io::Result<()> {
+    let root = match find_repo_root() {
+        Some(r) => r,
+        None => {
+            eprintln!("Erro: Nenhum repositório Clonaris encontrado.");
+            std::process::exit(1);
+        }
+    };
+
+    let redo_op = match pop_last_redo(&root)? {
+        Some(op) => op,
+        None => {
+            println!("Nenhuma operação desfeita para refazer.");
+            return Ok(());
+        }
+    };
+
+    println!(
+        "Refazendo operação: \x1b[1;36m{}\x1b[0m ({})",
+        redo_op.action, redo_op.description
+    );
+
+    if redo_op.new_head != "none" {
+        let commit_data = read_object(&root, &redo_op.new_head)?;
+        let commit = parse_commit(&commit_data)?;
+
+        restore_tree(&root, &commit.tree)?;
+        set_head(&root, &redo_op.new_head)?;
+
+        // Put op back into oplog
+        restore_op_to_log(&root, &redo_op)?;
+
+        println!(
+            "✓ Snapshot restabelecido para \x1b[33m{:.8}\x1b[0m",
+            redo_op.new_head
         );
     }
 
@@ -292,6 +433,42 @@ pub fn cmd_switch(branch_name: &str) -> io::Result<()> {
     Ok(())
 }
 
+pub fn cmd_tag(name: Option<&str>) -> io::Result<()> {
+    let root = match find_repo_root() {
+        Some(r) => r,
+        None => {
+            eprintln!("Erro: Nenhum repositório Clonaris encontrado.");
+            std::process::exit(1);
+        }
+    };
+
+    match name {
+        Some(tag_name) => {
+            let current_head = match get_head(&root)? {
+                Some(h) => h,
+                None => {
+                    eprintln!("Erro: Não é possível criar uma tag sem commits.");
+                    return Ok(());
+                }
+            };
+            create_tag(&root, tag_name, &current_head)?;
+            println!("✓ Tag '\x1b[1;35m{}\x1b[0m' criada no snapshot {:.8}", tag_name, current_head);
+        }
+        None => {
+            let tags = list_tags(&root)?;
+            if tags.is_empty() {
+                println!("Nenhuma tag criada ainda. Use 'clonaris tag <nome>' para criar uma.");
+                return Ok(());
+            }
+            println!("Tags:");
+            for (tag, hash) in tags {
+                println!("  \x1b[1;35m{:<15}\x1b[0m -> \x1b[33m{:.8}\x1b[0m", tag, hash);
+            }
+        }
+    }
+    Ok(())
+}
+
 pub fn print_help() {
     println!("\x1b[1mClonaris VCS\x1b[0m - Controle de versão simples, direto e sem atrito");
     println!("100% Rust Puro (Zero dependências externas)");
@@ -302,22 +479,27 @@ pub fn print_help() {
     println!("\x1b[1mCOMANDOS:\x1b[0m");
     println!("    init                 Inicializa um novo repositório (.clonaris/)");
     println!("    status               Mostra o estado atual dos arquivos");
+    println!("    diff [arquivo]       Mostra as alterações linha a linha (com cores)");
     println!("    save -m \"<msg>\"      Grava um novo snapshot atômico diretamente");
-    println!("    log                  Exibe o histórico de snapshots");
+    println!("    log                  Exibe o histórico de snapshots com árvore ASCII");
     println!("    undo                 Desfaz a última operação com segurança");
+    println!("    redo                 Refaz a última operação desfeita");
     println!("    branch [nome]        Lista os ramos ou cria um novo ramo");
     println!("    switch <ramo>        Alterna para outro ramo restaurando os arquivos");
+    println!("    tag [nome]           Lista as tags ou cria uma tag no snapshot atual");
     println!("    help                 Exibe esta ajuda");
     println!();
     println!("\x1b[1mEXEMPLO:\x1b[0m");
     println!("    clonaris init");
     println!("    echo 'hello' > index.txt");
     println!("    clonaris save -m 'Primeiro commit'");
-    println!("    clonaris status");
+    println!("    echo 'world' >> index.txt");
+    println!("    clonaris diff");
+    println!("    clonaris undo");
+    println!("    clonaris redo");
 }
 
 fn format_timestamp(timestamp: u64) -> String {
-    // Simple UTC date representation from timestamp without external chrono crate
     let seconds_in_day = 86400;
     let days = timestamp / seconds_in_day;
     let rem_seconds = timestamp % seconds_in_day;
@@ -325,7 +507,6 @@ fn format_timestamp(timestamp: u64) -> String {
     let minutes = (rem_seconds % 3600) / 60;
     let seconds = rem_seconds % 60;
 
-    // Approximate calendar calculation from epoch 1970-01-01
     let mut year = 1970;
     let mut d = days;
 

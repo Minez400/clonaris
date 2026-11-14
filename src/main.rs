@@ -1,4 +1,5 @@
 mod commands;
+mod diff;
 mod hash;
 mod objects;
 mod oplog;
@@ -20,6 +21,14 @@ fn main() {
     let result = match command {
         "init" => commands::cmd_init(),
         "status" => commands::cmd_status(),
+        "diff" => {
+            let target_file = if args.len() > 2 {
+                Some(args[2].as_str())
+            } else {
+                None
+            };
+            commands::cmd_diff(target_file)
+        }
         "save" => {
             let mut message = String::new();
             let mut i = 2;
@@ -42,6 +51,7 @@ fn main() {
         }
         "log" => commands::cmd_log(),
         "undo" => commands::cmd_undo(),
+        "redo" => commands::cmd_redo(),
         "branch" => {
             let branch_name = if args.len() > 2 {
                 Some(args[2].as_str())
@@ -56,6 +66,14 @@ fn main() {
                 std::process::exit(1);
             }
             commands::cmd_switch(&args[2])
+        }
+        "tag" => {
+            let tag_name = if args.len() > 2 {
+                Some(args[2].as_str())
+            } else {
+                None
+            };
+            commands::cmd_tag(tag_name)
         }
         "help" | "--help" | "-h" => {
             commands::print_help();
