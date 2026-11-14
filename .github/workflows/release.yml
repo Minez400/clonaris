@@ -35,17 +35,11 @@ jobs:
             binary_name: clonaris.exe
             asset_name: clonaris-windows-x86_64.zip
 
-          # macOS Apple Silicon (M1/M2/M3/M4)
+          # macOS Apple Silicon (M1/M2/M3/M4 & modern macOS)
           - os: macos-latest
             target: aarch64-apple-darwin
             binary_name: clonaris
             asset_name: clonaris-macos-aarch64.tar.gz
-
-          # macOS Intel (x86_64)
-          - os: macos-13
-            target: x86_64-apple-darwin
-            binary_name: clonaris
-            asset_name: clonaris-macos-x86_64.tar.gz
 
     steps:
       - name: Checkout repository
