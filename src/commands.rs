@@ -16,7 +16,7 @@ use crate::repository::{
     set_head,
 };
 use crate::workspace::{
-    get_head_tree, get_status, restore_tree, save, scan_workspace_files,
+    discard_file, get_head_tree, get_status, restore_tree, save, scan_workspace_files,
 };
 
 pub fn cmd_init() -> io::Result<()> {
@@ -172,6 +172,51 @@ pub fn cmd_diff(target_file: Option<&str>) -> io::Result<()> {
     Ok(())
 }
 
+pub fn cmd_discard(target: &str) -> io::Result<()> {
+    let root = match find_repo_root() {
+        Some(r) => r,
+        None => {
+            eprintln!("Erro: Nenhum repositório Clonaris encontrado.");
+            std::process::exit(1);
+        }
+    };
+
+    if target == "." {
+        let diff = get_status(&root)?;
+        if diff.is_clean() {
+            println!("Nenhuma alteração para descartar.");
+            return Ok(());
+        }
+        for file in diff.added.iter().chain(diff.modified.iter()).chain(diff.deleted.iter()) {
+            discard_file(&root, file)?;
+        }
+        println!("✓ Todas as alterações locais foram descartadas com sucesso.");
+    } else {
+        if discard_file(&root, target)? {
+            println!("✓ Alterações em '{}' descartadas com sucesso.", target);
+        } else {
+            println!("Nenhuma alteração encontrada para descartar em '{}'.", target);
+        }
+    }
+    Ok(())
+}
+
+pub fn cmd_resolve(file: &str, strategy: Option<&str>) -> io::Result<()> {
+    let root = match find_repo_root() {
+        Some(r) => r,
+        None => {
+            eprintln!("Erro: Nenhum repositório Clonaris encontrado.");
+            std::process::exit(1);
+        }
+    };
+    crate::resolve::prompt_resolve_file(&root.join(file), strategy)
+}
+
+pub fn cmd_completion(shell: Option<&str>) -> io::Result<()> {
+    crate::completion::generate_completion(shell.unwrap_or("bash"));
+    Ok(())
+}
+
 pub fn cmd_save(message: &str) -> io::Result<()> {
     let root = match find_repo_root() {
         Some(r) => r,
@@ -230,7 +275,6 @@ pub fn cmd_amend(message: &str) -> io::Result<()> {
     let old_commit_data = read_object(&root, &head_hash)?;
     let old_commit = parse_commit(&old_commit_data)?;
 
-    // Scan workspace to update tree with any new changes if present
     let files = scan_workspace_files(&root)?;
     let mut tree_entries = Vec::new();
     for rel_path in files {
@@ -365,7 +409,8 @@ pub fn cmd_undo() -> io::Result<()> {
 
     if last_op.prev_head == "none" {
         // Revert to pristine state (before first commit)
-        let head_ref = root.join(".clonaris").join("refs").join("heads").join("main");
+        let current_branch = get_current_branch(&root);
+        let head_ref = root.join(".clonaris").join("refs").join("heads").join(current_branch);
         let _ = fs::remove_file(head_ref);
         println!("✓ Retornado ao estado inicial (repositório sem commits).");
     } else {
@@ -547,12 +592,6 @@ pub fn cmd_switch(branch_name: &str) -> io::Result<()> {
         return Ok(());
     }
 
-    let diff = get_status(&root)?;
-    if !diff.is_clean() {
-        println!("⚠️  Aviso: Você possui alterações locais pendentes.");
-        println!("   O Clonaris preservará seus arquivos modificados.");
-    }
-
     let target_commit_hash = fs::read_to_string(&branch_file)?.trim().to_string();
     let commit_data = read_object(&root, &target_commit_hash)?;
     let commit = parse_commit(&commit_data)?;
@@ -626,6 +665,8 @@ pub fn print_help() {
     println!("    diff [arquivo]       Mostra as alterações linha a linha (com cores)");
     println!("    save -m \"<msg>\"      Grava um novo snapshot atômico diretamente");
     println!("    amend -m \"<msg>\"     Atualiza o snapshot mais recente com segurança");
+    println!("    discard <arquivo|.>  Descarta alterações locais em um arquivo ou em tudo");
+    println!("    resolve <arquivo>    Resolve conflitos interativamente (ou use --current / --target)");
     println!("    log                  Exibe o histórico de snapshots com árvore ASCII");
     println!("    ops                  Exibe a linha do tempo de operações (OpLog)");
     println!("    undo                 Desfaz a última operação com segurança");
@@ -634,18 +675,15 @@ pub fn print_help() {
     println!("    switch <ramo>        Alterna para outro ramo restaurando os arquivos");
     println!("    merge <ramo>         Mescla outro ramo (com conflitos não-bloqueantes!)");
     println!("    tag [nome]           Lista as tags ou cria uma tag no snapshot atual");
+    println!("    completion [shell]   Gera script de autocompletar (bash ou zsh)");
     println!("    help                 Exibe esta ajuda");
     println!();
     println!("\x1b[1mEXEMPLO:\x1b[0m");
     println!("    clonaris init");
     println!("    echo 'hello' > index.txt");
     println!("    clonaris save -m 'Primeiro commit'");
-    println!("    clonaris branch feature");
-    println!("    clonaris switch feature");
-    println!("    echo 'feature work' >> index.txt");
-    println!("    clonaris save -m 'Trabalho na feature'");
-    println!("    clonaris switch main");
-    println!("    clonaris merge feature");
+    println!("    echo 'mudança indesejada' >> index.txt");
+    println!("    clonaris discard index.txt");
     println!("    clonaris ops");
 }
 

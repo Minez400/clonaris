@@ -1,10 +1,12 @@
 mod commands;
+mod completion;
 mod diff;
 mod hash;
 mod merge;
 mod objects;
 mod oplog;
 mod repository;
+mod resolve;
 mod workspace;
 
 use std::env;
@@ -70,6 +72,25 @@ fn main() {
             }
             commands::cmd_amend(&message)
         }
+        "discard" => {
+            if args.len() < 3 {
+                eprintln!("Erro: Especifique o arquivo para descartar alterações ou '.' para todas. Ex: clonaris discard main.rs");
+                std::process::exit(1);
+            }
+            commands::cmd_discard(&args[2])
+        }
+        "resolve" => {
+            if args.len() < 3 {
+                eprintln!("Erro: Especifique o arquivo para resolver conflitos. Ex: clonaris resolve main.rs [--current/--target]");
+                std::process::exit(1);
+            }
+            let strategy = if args.len() > 3 {
+                Some(args[3].as_str())
+            } else {
+                None
+            };
+            commands::cmd_resolve(&args[2], strategy)
+        }
         "log" => commands::cmd_log(),
         "ops" => commands::cmd_ops(),
         "undo" => commands::cmd_undo(),
@@ -103,6 +124,14 @@ fn main() {
                 None
             };
             commands::cmd_tag(tag_name)
+        }
+        "completion" => {
+            let shell = if args.len() > 2 {
+                Some(args[2].as_str())
+            } else {
+                None
+            };
+            commands::cmd_completion(shell)
         }
         "help" | "--help" | "-h" => {
             commands::print_help();

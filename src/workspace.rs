@@ -216,23 +216,23 @@ pub fn save(repo_root: &Path, message: &str) -> io::Result<Option<String>> {
     Ok(Some(commit_hash))
 }
 
-pub fn restore_tree(repo_root: &Path, tree_hash: &str) -> io::Result<()> {
-    let tree_data = read_object(repo_root, tree_hash)?;
-    let tree_entries = parse_tree(&tree_data)?;
+pub fn restore_tree(repo_root: &Path, target_tree_hash: &str) -> io::Result<()> {
+    let target_tree_data = read_object(repo_root, target_tree_hash)?;
+    let target_tree_entries = parse_tree(&target_tree_data)?;
+    let target_paths: HashSet<String> = target_tree_entries.iter().map(|e| e.path.clone()).collect();
 
-    let ignore_patterns = load_ignore_patterns(repo_root);
-    // Remove currently tracked files that might not exist in target tree
-    let current_files = scan_workspace_files(repo_root)?;
-    let target_paths: HashSet<String> = tree_entries.iter().map(|e| e.path.clone()).collect();
-
-    for curr in current_files {
-        if !target_paths.contains(&curr) && !should_ignore(&curr, &ignore_patterns) {
-            let _ = fs::remove_file(repo_root.join(&curr));
+    // BUG FIX: Only delete files that were tracked in the previous HEAD commit and are NOT in the target tree!
+    // Untracked local files are safely preserved.
+    let head_tree = get_head_tree(repo_root)?;
+    for (tracked_file, _) in head_tree {
+        if !target_paths.contains(&tracked_file) {
+            let full_path = repo_root.join(&tracked_file);
+            let _ = fs::remove_file(full_path);
         }
     }
 
     // Write all files from target tree
-    for entry in tree_entries {
+    for entry in target_tree_entries {
         let blob_data = read_object(repo_root, &entry.hash)?;
         let file_path = repo_root.join(&entry.path);
 
@@ -243,4 +243,30 @@ pub fn restore_tree(repo_root: &Path, tree_hash: &str) -> io::Result<()> {
     }
 
     Ok(())
+}
+
+pub fn discard_file(repo_root: &Path, rel_path: &str) -> io::Result<bool> {
+    let head_tree = get_head_tree(repo_root)?;
+    let full_path = repo_root.join(rel_path);
+
+    match head_tree.get(rel_path) {
+        Some(blob_hash) => {
+            // File existed in HEAD: restore it to exact snapshot state
+            let blob_data = read_object(repo_root, blob_hash)?;
+            if let Some(parent) = full_path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::write(full_path, blob_data)?;
+            Ok(true)
+        }
+        None => {
+            // File is newly added and not in HEAD: delete it if it exists
+            if full_path.exists() {
+                fs::remove_file(full_path)?;
+                Ok(true)
+            } else {
+                Ok(false)
+            }
+        }
+    }
 }
